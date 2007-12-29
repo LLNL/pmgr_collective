@@ -21,17 +21,60 @@
 #include <unistd.h>
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include "pmgr_collective_common.h"
+
+/*
+   my rank
+   -3     ==> unitialized task (may be mpirun or MPI task)
+   -2     ==> mpirun
+   -1     ==> MPI task before rank is assigned
+   0..N-1 ==> MPI task
+*/
+int pmgr_me = -3;
+
+/* malloc n bytes, and bail out with error msg if fails */
+void* pmgr_malloc(size_t n, char* msg)
+{
+    void* p = malloc(n);
+    if (!p) {
+        pmgr_error("malloc(%d) failed: %s (errno %d)", n, msg, errno);
+        exit(1);
+    }
+    return p;
+}
 
 /* print message to stderr */
 void pmgr_error(char *fmt, ...)
 {
-        va_list argp;
-        fprintf(stderr, "PMGR_COLLECTIVE ERROR: ");
+    va_list argp;
+    fprintf(stderr, "PMGR_COLLECTIVE ERROR: ");
+    if (pmgr_me >= 0) {
+        fprintf(stderr, "%d: ", pmgr_me);
+    } else if (pmgr_me == -2) {
+        fprintf(stderr, "mpirun: ");
+    } else if (pmgr_me == -1) {
+        fprintf(stderr, "unitialized MPI task: ");
+    } else {
+        fprintf(stderr, "unitialized task (mpirun or MPI): ");
+    }
+    va_start(argp, fmt);
+    vfprintf(stderr, fmt, argp);
+    va_end(argp);
+    fprintf(stderr, "\n");
+}
+
+/* print message to stderr */
+void pmgr_debug(char *fmt, ...)
+{
+    va_list argp;
+    int mpirun_debug = 1;
+    if (mpirun_debug > 0) {
         va_start(argp, fmt);
         vfprintf(stderr, fmt, argp);
         va_end(argp);
         fprintf(stderr, "\n");
+    }
 }
 
 /* write size bytes from buf into fd, retry if necessary */
@@ -44,12 +87,10 @@ int pmgr_write_fd(int fd, void* buf, int size)
     while (n < size) {
 	rc = write(fd, offset, size - n);
 
-	if(rc < 0) {
-	    if(errno == EINTR || errno == EAGAIN) continue;
+	if (rc < 0) {
+	    if(errno == EINTR || errno == EAGAIN) { continue; }
 	    return rc;
-	}
-
-	else if(rc == 0) {
+	} else if(rc == 0) {
 	    return n;
 	}
 
@@ -70,12 +111,10 @@ int pmgr_read_fd(int fd, void* buf, int size)
     while (n < size) {
 	rc = read(fd, offset, size - n);
 
-	if(rc < 0) {
-	    if(errno == EINTR || errno == EAGAIN) continue;
+	if (rc < 0) {
+	    if(errno == EINTR || errno == EAGAIN) { continue; }
 	    return rc;
-	}
-
-	else if(rc == 0) {
+	} else if(rc == 0) {
 	    return n;
 	}
 

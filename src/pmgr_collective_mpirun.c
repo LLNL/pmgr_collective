@@ -27,19 +27,19 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <string.h>
+#include <stdlib.h>
+#include <errno.h>
 #include "pmgr_collective_mpirun.h"
 
 int* fd_by_rank;
 int  N;
-
-#define pmgr_debug(x, ...)
 
 /* Write size bytes from buf into socket for rank */
 void pmgr_send(void* buf, int size, int rank)
 {
 	int fd = fd_by_rank[rank];
 	if (pmgr_write_fd(fd, buf, size) < 0) {
-		pmgr_error("mvapich: write hostid rank %d: %m", rank);
+		pmgr_error("error writing to rank %d (errno %d)", rank, errno);
 	}
 }
 
@@ -48,7 +48,7 @@ void pmgr_recv(void* buf, int size, int rank)
 {
 	int fd = fd_by_rank[rank];
 	if (pmgr_read_fd(fd, buf, size) <= 0) {
-		pmgr_error("mvapich reading from %d", rank);
+		pmgr_error("error reading from rank %d (errno %d)", rank, errno);
 	}
 }
 
@@ -82,7 +82,7 @@ void pmgr_allgatherbcast(void* buf, int size)
 void pmgr_alltoallbcast(void* buf, int size)
 {
 	int pbufsize = size * N;
-	void* pbuf = malloc(pbufsize);	
+	void* pbuf = (void*) pmgr_malloc(pbufsize, "Temporary buffer for alltoall");	
 
 	int i, src;
 	for (i = 0; i < N; i++) {
@@ -94,14 +94,14 @@ void pmgr_alltoallbcast(void* buf, int size)
 		pmgr_send(pbuf, pbufsize, i);
 	}
 	
-	free(pbuf);
+	pmgr_free(pbuf);
 }
 
 /* Check that new == curr value if curr has been initialized (-1 == uninitialized) */
 int set_current(int curr, int new)
 {
-	if (curr == -1) curr = new;
-	if (new != curr) pmgr_error("PMGR unexpected value: received %d, expecting %d", new, curr);
+	if (curr == -1) { curr = new; }
+	if (new != curr) { pmgr_error("unexpected value: received %d, expecting %d", new, curr); }
 	return curr;
 }
 
@@ -176,6 +176,7 @@ int set_current(int curr, int new)
 */
 int pmgr_processops(int* fds, int nprocs)
 {
+  pmgr_me = -2;
   pmgr_debug("Processing PMGR opcodes");
   fd_by_rank = fds;
   N = nprocs;
@@ -205,40 +206,40 @@ int pmgr_processops(int* fds, int nprocs)
 				break;
 			case PMGR_ABORT: /* followed by exit code */
 				code = pmgr_recv_int(i);
-				pmgr_error("mvapich abort with code %d from rank %d", code, i);
+				pmgr_error("received abort with code %d from rank %d", code, i);
 				break;
 			case PMGR_BARRIER: /* no data */
 				break;
 			case PMGR_BCAST: /* root, size of message, then message data (from root only) */
 				root = set_current(root, pmgr_recv_int(i));
 				size = set_current(size, pmgr_recv_int(i));
-				if (!buf) buf = (void*) malloc(size);
-				if (i == root) pmgr_recv(buf, size, i);
+				if (!buf) { buf = (void*) pmgr_malloc(size, "Bcast buffer"); }
+				if (i == root) { pmgr_recv(buf, size, i); }
 				break;
 			case PMGR_GATHER: /* root, size of message, then message data */
 				root = set_current(root, pmgr_recv_int(i));
 				size = set_current(size, pmgr_recv_int(i));
-				if (!buf) buf = (void*) malloc(size * N);
+				if (!buf) { buf = (void*) pmgr_malloc(size * N, "Gather buffer"); }
 				pmgr_recv(buf + size*i, size, i);
 				break;
 			case PMGR_SCATTER: /* root, size of message, then message data */
 				root = set_current(root, pmgr_recv_int(i));
 				size = set_current(size, pmgr_recv_int(i));
-				if (!buf) buf = (void*) malloc(size * N);
-				if (i == root) pmgr_recv(buf, size * N, i);
+				if (!buf) { buf = (void*) pmgr_malloc(size * N, "Scatter buffer"); }
+				if (i == root) { pmgr_recv(buf, size * N, i); }
 				break;
 			case PMGR_ALLGATHER: /* size of message, then message data */
 				size = set_current(size, pmgr_recv_int(i));
-				if (!buf) buf = (void*) malloc(size * N);
+				if (!buf) { buf = (void*) pmgr_malloc(size * N, "Allgather buffer"); }
 				pmgr_recv(buf + size*i, size, i);
 				break;
 			case PMGR_ALLTOALL: /* size of message, then message data */
 				size = set_current(size, pmgr_recv_int(i));
-				if (!buf) buf = (void*) malloc(size * N * N);
+				if (!buf) { buf = (void*) pmgr_malloc(size * N * N, "Alltoall buffer"); }
 				pmgr_recv(buf + (size*N)*i, size * N, i);
 				break;
 			default:
-				pmgr_error("Unrecognized PMGR opcode: %d", opcode);
+				pmgr_error("unrecognized PMGR_COLLECTIVE opcode: %d", opcode);
 		}
 	} /* end for each process, read in one packet (opcode and its associated data) */
 
@@ -286,10 +287,10 @@ int pmgr_processops(int* fds, int nprocs)
 			pmgr_debug("Completed PMGR_ALLTOALL");
 			break;
 		default:
-			pmgr_error("Unrecognized PMGR opcode: %d", opcode);
+			pmgr_error("unrecognized PMGR_COLLECTIVE opcode: %d", opcode);
 	} /* end switch(opcode) for Completing operations */
 
-	if (buf) { free(buf); }
+	pmgr_free(buf);
   } /* while(!exit) must be more opcodes to process */
 
   pmgr_debug("Completed processing PMGR opcodes");

@@ -10,10 +10,14 @@ all: clean
 	  mv libpmgr_collective.so.1.0.1 ../lib/. && \
 	  ln -s libpmgr_collective.so.1.0.1 ../lib/libpmgr_collective.so.1 && \
 	  ln -s libpmgr_collective.so.1     ../lib/libpmgr_collective.so
+	cd test && \
+	  gcc -g -O0 -o client client.c -I ../include -L ../lib -lpmgr_collective
+
 
 clean:
 	rm -rf src/*.o
 	rm -rf lib/*
+	rm -rf test/*.o test/client
 
 lustre:
 	rm -rf /p/lscratchc/moody20/scr/*

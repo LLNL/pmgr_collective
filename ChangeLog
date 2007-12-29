@@ -1,0 +1,7 @@
+2007-12-28 Adam Moody <moody20@llnl.gov>
+
+	* : cleaning up code and adding more info to error messages.
+
+2007-12-28 Adam Moody <moody20@llnl.gov>
+
+	* : initial import -- current version matches OSU MVAPICH-1 code.

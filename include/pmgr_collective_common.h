@@ -42,8 +42,26 @@
 #define PMGR_ALLGATHER 7
 #define PMGR_ALLTOALL  8
 
+/*
+   my rank
+   -3     ==> unitialized task (may be mpirun or MPI task)
+   -2     ==> mpirun
+   -1     ==> MPI task before rank is assigned
+   0..N-1 ==> MPI task
+*/
+extern int pmgr_me;
+
+/* malloc n bytes, and bail out with error msg if fails */
+void* pmgr_malloc(size_t n, char* msg);
+
+/* macro to free the pointer if set, then set it to NULL */
+#define pmgr_free(p) { if(p) { free((void*)p); p=NULL; } }
+
 /* print message to stderr */
 void pmgr_error(char *fmt, ...);
+
+/* print message to stderr */
+void pmgr_debug(char *fmt, ...);
 
 /* write size bytes from buf into fd, retry if necessary */
 int pmgr_write_fd(int fd, void* buf, int size);
