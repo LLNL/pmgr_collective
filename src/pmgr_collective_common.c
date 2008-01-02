@@ -33,6 +33,19 @@
 */
 int pmgr_me = -3;
 
+int pmgr_echo_debug = 0;
+
+/* Reads environment variable, bails if not set */
+char* pmgr_getenv(char* envvar, int type)
+{
+    char* str = getenv(envvar);
+    if (str == NULL && type == ENV_REQUIRED) {
+        pmgr_error("Missing required environment variable: %s", envvar);
+        exit(1);
+    }
+    return str;
+}
+
 /* malloc n bytes, and bail out with error msg if fails */
 void* pmgr_malloc(size_t n, char* msg)
 {
@@ -65,11 +78,19 @@ void pmgr_error(char *fmt, ...)
 }
 
 /* print message to stderr */
-void pmgr_debug(char *fmt, ...)
+void pmgr_debug(int level, char *fmt, ...)
 {
     va_list argp;
-    int mpirun_debug = 1;
-    if (mpirun_debug > 0) {
+    if (pmgr_echo_debug > 0 && pmgr_echo_debug >= level) {
+        if (pmgr_me >= 0) {
+            fprintf(stderr, "%d: ", pmgr_me);
+        } else if (pmgr_me == -2) {
+            fprintf(stderr, "mpirun: ");
+        } else if (pmgr_me == -1) {
+            fprintf(stderr, "unitialized MPI task: ");
+        } else {
+            fprintf(stderr, "unitialized task (mpirun or MPI): ");
+        }
         va_start(argp, fmt);
         vfprintf(stderr, fmt, argp);
         va_end(argp);

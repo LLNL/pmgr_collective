@@ -51,6 +51,13 @@
 */
 extern int pmgr_me;
 
+extern int pmgr_echo_debug;
+
+/* Reads environment variable, bails if not set */
+#define ENV_REQUIRED 0
+#define ENV_OPTIONAL 1
+char* pmgr_getenv(char* envvar, int type);
+
 /* malloc n bytes, and bail out with error msg if fails */
 void* pmgr_malloc(size_t n, char* msg);
 
@@ -61,7 +68,7 @@ void* pmgr_malloc(size_t n, char* msg);
 void pmgr_error(char *fmt, ...);
 
 /* print message to stderr */
-void pmgr_debug(char *fmt, ...);
+void pmgr_debug(int leve, char *fmt, ...);
 
 /* write size bytes from buf into fd, retry if necessary */
 int pmgr_write_fd(int fd, void* buf, int size);

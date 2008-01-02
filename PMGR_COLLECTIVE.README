@@ -1,0 +1,73 @@
+
+====================================================
+Environment Variables
+====================================================
+All environment variables are read when a client calls pmgr_init().
+
+The following variables must be set to define the client's MPI context:
+
+  MPIRUN_NPROCS - number of MPI processes in job       must be >0
+  MPIRUN_RANK   - the client's MPI rank in the job     must be in [0,N-1]
+  MPIRUN_ID     - unique jobid of current application  must be !=0
+  MPIRUN_HOST   - IP address of the mpirun process in dotted decimal notation
+  MPIRUN_PORT   - port number of the mpirun process    must be >0
+
+Optional:
+  NOT_USE_TOTALVIEW
+    MPIRUN_PROCESSES - (required if NOT_USE_TOTALVIEW is set and != 0)
+
+Debug statements can be turned on for troubleshooting or timing:
+
+  MPIRUN_DEBUG={0,1,2}
+    0 - disable debug statements
+    1 - first debug verbosity, includes timing
+    2 - increased debug verbosity
+
+Currently, only mpirun includes debug statements.
+
+It's possible to select the collective algorithms:
+
+  MPIRUN_USE_TREES={0,1}       - disable/enable all trees (disabling also avoids setup and teardown)
+  MPIRUN_USE_GATHER_TREE={0,1} - disable/enable gather tree
+  MPIRUN_USE_BCAST_TREE={0,1}  - disable/enable bcast tree
+
+If a tree is disabled, then the collective will fallback to the mpirun
+support, which is typically a flat tree with the mpirun process at the root.
+
+====================================================
+Current Implementation
+====================================================
+The current implementation sets up a binomial tree via TCP sockets with rank 0 at the root.
+During pmgr_open(), each client process opens a TCP socket to accept connections and passes
+its IP:port to mpirun.  After gathering the IP:port entry for each process, mpirun passes
+this socket table to rank 0.  Rank 0 then connects to each of its children (now that it has
+everyone's address) and forwards the table to each.  Each child receives the socket table,
+opens a connection with any children it has, and forwards the table.  The process continues
+down the tree until a leaf child is reached which just accepts the incoming parent connection.
+
+This same binomial tree, which was used to distribute the socket table is then used to gather
+and / or broadcast data during collective operations.  Namely, this tree is used during:
+
+  pmgr_barrier
+  pmgr_allgather
+  pmgr_bcast  (when rank 0 is the root)
+  pmgr_gather (when rank 0 is the root)
+
+The remaining collectives are implemented via mpirun support, which typically amounts to a
+flat tree with mpirun as the root.  These collectives thus scale linearly:
+
+  pmgr_bcast  (when rank 0 is not the root)
+  pmgr_gather (when rank 0 is not the root)
+  pmgr_scatter
+  pmgr_alltoall
+
+====================================================
+Ideas for future work (if the demand arises)
+====================================================
+It's possible to extend this implementation to set set up other TCP topograhies (in addition
+to the binomial tree) via the socket table to provide scalable support for other collectives.
+
+A scalable PMI could probably be implemented on top of PMGR_COLLECTIVE using pmgr_allgather.
+
+As process counts increase higher and higher, at some point, mpirun itself will likely need
+to collect the IP:port entries via a tree network to build the socket table.

@@ -102,19 +102,6 @@ int  pmgr_num_child_incl; /* total number of children this node is responsible f
  * =============================
  */
 
-/* Reads environment variable, bails if not set */
-#define ENV_REQUIRED 0
-#define ENV_OPTIONAL 1
-char* pmgr_getenv(char* envvar, int type)
-{
-    char* str = getenv(envvar);
-    if (str == NULL && type == ENV_REQUIRED) {
-        pmgr_error("%d: Missing required environment variable: %s", pmgr_me, envvar);
-        exit(1);
-    }
-    return str;
-}
-
 /* read size bytes into buf from mpirun_socket */
 int pmgr_read(void* buf, int size)
 {
@@ -268,13 +255,15 @@ int pmgr_connect(struct in_addr ip, int port)
     /* create a socket */
     int sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (sockfd < 0) {
-        pmgr_error("%d: Creating socket (errno %d)", pmgr_me, errno);
+        pmgr_error("%d: Creating socket: (socket() errno %d): file %s line %d",
+            pmgr_me, errno, __FILE__, __LINE__);
         exit(1);
     }
 
     /* connect socket to address */
     if (connect(sockfd, (struct sockaddr *) &sockaddr, sizeof(sockaddr)) < 0) {
-        pmgr_error("%d: Connecting socket (errno %d)", pmgr_me, errno);
+        pmgr_error("%d: Connecting socket (connect() errno %d): file %s line %d",
+            pmgr_me, errno, __FILE__, __LINE__);
         exit(1);
     }
 
@@ -320,7 +309,8 @@ int pmgr_open_tree()
     /* create a socket to accept connection from parent */
     int sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (sockfd < 0) {
-        pmgr_error("%d: Creating parent socket (errno %d)", pmgr_me, errno);
+        pmgr_error("%d: Creating parent socket (socket() errno %d): file %s line %d",
+            pmgr_me, errno, __FILE__, __LINE__);
         exit(1);
     }
 
@@ -332,20 +322,23 @@ int pmgr_open_tree()
 
     /* bind socket */
     if (bind(sockfd, (struct sockaddr *) &sin, sizeof(sin)) < 0) {
-        pmgr_error("%d: Binding parent socket (errno %d)", pmgr_me, errno);
+        pmgr_error("%d: Binding parent socket (bind() errno %d): file %s line %d",
+            pmgr_me, errno, __FILE__, __LINE__);
         exit(1);
     }
 
     /* set the socket to listen for connections */
     if (listen(sockfd, 1) < 0) {
-        pmgr_error("%d: Setting parent socket to listen (errno %d)", pmgr_me, errno);
+        pmgr_error("%d: Setting parent socket to listen (listen() errno %d): file %s line %d",
+            pmgr_me, errno, __FILE__, __LINE__);
         exit(1);
     }
 
     /* ask which port the OS assigned our socket to */
     socklen_t len = sizeof(sin);
     if (getsockname(sockfd, (struct sockaddr *) &sin, &len) < 0) {
-        pmgr_error("%d: Reading parent socket port number (errno %d)", pmgr_me, errno);
+        pmgr_error("%d: Reading parent socket port number (getsockname() errno %d): file %s line %d",
+            pmgr_me, errno, __FILE__, __LINE__);
         exit(1);
     }
 
@@ -597,14 +590,15 @@ int pmgr_open()
 
     mpirun_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (mpirun_socket < 0) {
-        pmgr_error("%d: Creating mpirun socket (errno %d)", pmgr_me, errno);
+        pmgr_error("%d: Creating mpirun socket (socket() errno %d): file %s line %d",
+            pmgr_me, errno, __FILE__, __LINE__);
         exit(1);
     }
 
     struct hostent* mpirun_hostent = gethostbyname(mpirun_hostname);
     if (!mpirun_hostent) {
-        pmgr_error("%d: gethostbyname(%s) failed: %s (%d)",
-               pmgr_me, mpirun_hostname, hstrerror(h_errno), h_errno);
+        pmgr_error("%d: gethostbyname(%s) failed: %s (h_errno %d): file %s line %d",
+            pmgr_me, mpirun_hostname, hstrerror(h_errno), h_errno, __FILE__, __LINE__);
         exit(1);
     }
 
@@ -613,7 +607,8 @@ int pmgr_open()
     sockaddr.sin_port = htons(mpirun_port);
 
     if (connect(mpirun_socket, (struct sockaddr *) &sockaddr, sizeof(sockaddr)) < 0) {
-        pmgr_error("%d: Connecting mpirun socket (errno %d)", pmgr_me, errno);
+        pmgr_error("%d: Connecting mpirun socket (conenct() errno %d): file %s line %d",
+            pmgr_me, errno, __FILE__, __LINE__);
         exit(1);
     }
 
@@ -672,8 +667,14 @@ int pmgr_init(int *argc_p, char ***argv_p, int *np_p, int *me_p,
     char *value;
 
     pmgr_me = -1;
+    pmgr_echo_debug = 0;
 
     /* Get information from environment, not from the argument list */
+
+    /* MPIRUN_DEBUG={0,1} disables/enables debug statements */
+    if ((value = pmgr_getenv("MPIRUN_DEBUG", ENV_OPTIONAL)) != NULL) {
+        pmgr_echo_debug = atoi(value);
+    }
 
     /* MPI rank of current process */
     pmgr_me = atoi(pmgr_getenv("MPIRUN_RANK", ENV_REQUIRED));
@@ -692,29 +693,29 @@ int pmgr_init(int *argc_p, char ***argv_p, int *np_p, int *me_p,
 
     /* check that we have a valid number of processes */
     if (pmgr_nprocs <= 0) {
-        pmgr_error("%d: Invalid MPIRUN_NPROCS %s",
-                   pmgr_me, pmgr_getenv("MPIRUN_NPROCS", ENV_REQUIRED));
+        pmgr_error("%d: Invalid MPIRUN_NPROCS %s: file %s line %d",
+            pmgr_me, pmgr_getenv("MPIRUN_NPROCS", ENV_REQUIRED), __FILE__, __LINE__);
         exit(1);
     }
 
     /* check that our rank is valid */
     if (pmgr_me < 0 || pmgr_me >= pmgr_nprocs) {
-        pmgr_error("%d: Invalid MPIRUN_RANK %s",
-                   pmgr_me, pmgr_getenv("MPIRUN_RANK", ENV_REQUIRED));
+        pmgr_error("%d: Invalid MPIRUN_RANK %s: file %s line %d",
+            pmgr_me, pmgr_getenv("MPIRUN_RANK", ENV_REQUIRED), __FILE__, __LINE__);
         exit(1);
     }
 
     /* check that we have a valid jobid */
     if (pmgr_id == 0) {
-        pmgr_error("%d: Invalid MPIRUN_ID %s",
-                   pmgr_me, pmgr_getenv("MPIRUN_ID", ENV_REQUIRED));
+        pmgr_error("%d: Invalid MPIRUN_ID %s: file %s line %d",
+            pmgr_me, pmgr_getenv("MPIRUN_ID", ENV_REQUIRED), __FILE__, __LINE__);
         exit(1);
     }
 
     /* check that we have a valid mpirun port */
     if (mpirun_port <= 0) {
-        pmgr_error("%d: Invalid MPIRUN_PORT %s",
-                   pmgr_me, pmgr_getenv("MPIRUN_PORT", ENV_REQUIRED));
+        pmgr_error("%d: Invalid MPIRUN_PORT %s: file %s line %d",
+            pmgr_me, pmgr_getenv("MPIRUN_PORT", ENV_REQUIRED), __FILE__, __LINE__);
         exit(1);
     }
 
@@ -724,14 +725,15 @@ int pmgr_init(int *argc_p, char ***argv_p, int *np_p, int *me_p,
 
         str = strdup(pmgr_getenv("MPIRUN_PROCESSES", ENV_REQUIRED));
         if (str == NULL) {
-            pmgr_error("%d: Can't allocate process list (errno %d)", pmgr_me, errno);
+            pmgr_error("%d: Can't allocate process list (strdup() errno %d): file %s line %d",
+                pmgr_me, errno, __FILE__, __LINE__);
             exit(1);
         }
 
         for (i = 0; i < pmgr_nprocs; i++) {
             if (!str) {
-                pmgr_error("%d: Invalid MPIRUN process list: '%s' ",
-                           pmgr_me, pmgr_getenv("MPIRUN_PROCESSES", ENV_REQUIRED));
+                pmgr_error("%d: Invalid MPIRUN process list: '%s': file %s line %d",
+                    pmgr_me, pmgr_getenv("MPIRUN_PROCESSES", ENV_REQUIRED), __FILE__, __LINE__);
                 exit(1);
             }
 
@@ -814,14 +816,15 @@ int pmgr_abort(int code, const char *fmt, ...)
 
     he = gethostbyname(mpirun_hostname);
     if (!he) {
-        pmgr_error("%d: pmgr_abort: gethostbyname(%s) failed: %s (%d)",
-               pmgr_me, mpirun_hostname, hstrerror(h_errno), h_errno);
+        pmgr_error("%d: pmgr_abort: gethostbyname(%s) failed: %s (h_errno %d): file %s line %d",
+            pmgr_me, mpirun_hostname, hstrerror(h_errno), h_errno, __FILE__, __LINE__);
         return -1;
     }
 
     s = socket(AF_INET, SOCK_STREAM, 0);
     if (s < 0) {
-        pmgr_error("%d: pmgr_abort: Failed to create socket: (errno %d)", pmgr_me, errno);
+        pmgr_error("%d: pmgr_abort: Failed to create socket: (socket() errno %d): file %s line %d",
+            pmgr_me, errno, __FILE__, __LINE__);
         return -1;
     }
 
@@ -830,7 +833,8 @@ int pmgr_abort(int code, const char *fmt, ...)
     memcpy(&sin.sin_addr, he->h_addr_list[0], sizeof(sin.sin_addr));
     sin.sin_port = htons(mpirun_port);
     if (connect(s, (struct sockaddr *) &sin, sizeof(sin)) < 0) {
-        pmgr_error("%d: pmgr_abort: Connect to mpirun failed (errno %d)", pmgr_me, errno);
+        pmgr_error("%d: pmgr_abort: Connect to mpirun failed (connect() errno %d): file %s line %d",
+            pmgr_me, errno, __FILE__, __LINE__);
         return -1;
     }
 
