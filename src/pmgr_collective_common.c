@@ -82,6 +82,7 @@ void pmgr_debug(int level, char *fmt, ...)
 {
     va_list argp;
     if (pmgr_echo_debug > 0 && pmgr_echo_debug >= level) {
+        fprintf(stderr, "PMGR_COLLECTIVE DEBUG: ");
         if (pmgr_me >= 0) {
             fprintf(stderr, "%d: ", pmgr_me);
         } else if (pmgr_me == -2) {

@@ -45,7 +45,7 @@ double pmgr_getsecs(struct timeval* tv2, struct timeval* tv1)
 void pmgr_gettimeofday(struct timeval* tv)
 {
 	if (gettimeofday(tv, NULL) < 0) {
-		pmgr_error("getting time (gettimeofday() %m errno %d)",
+		pmgr_error("getting time (gettimeofday() %m errno=%d)",
 			errno);
 	}
 }
@@ -55,7 +55,7 @@ void pmgr_send(void* buf, int size, int rank)
 {
 	int fd = fd_by_rank[rank];
 	if (pmgr_write_fd(fd, buf, size) < 0) {
-		pmgr_error("writing to rank %d (write() %m errno %d) @ file %s:%d",
+		pmgr_error("writing to rank %d (write() %m errno=%d) @ file %s:%d",
 			rank, errno, __FILE__, __LINE__);
 	}
 }
@@ -65,7 +65,7 @@ void pmgr_recv(void* buf, int size, int rank)
 {
 	int fd = fd_by_rank[rank];
 	if (pmgr_read_fd(fd, buf, size) <= 0) {
-		pmgr_error("reading from rank %d (read() %m errno %d) @ file %s:%d",
+		pmgr_error("reading from rank %d (read() %m errno=%d) @ file %s:%d",
 			rank, errno, __FILE__, __LINE__);
 	}
 }

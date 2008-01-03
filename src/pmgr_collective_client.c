@@ -255,14 +255,14 @@ int pmgr_connect(struct in_addr ip, int port)
     /* create a socket */
     int sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (sockfd < 0) {
-        pmgr_error("Creating socket: (socket() %m errno %d) @ file %s:%d",
+        pmgr_error("Creating socket: (socket() %m errno=%d) @ file %s:%d",
             errno, __FILE__, __LINE__);
         exit(1);
     }
 
     /* connect socket to address */
     if (connect(sockfd, (struct sockaddr *) &sockaddr, sizeof(sockaddr)) < 0) {
-        pmgr_error("Connecting socket (connect() %m errno %d) @ file %s:%d",
+        pmgr_error("Connecting socket (connect() %m errno=%d) @ file %s:%d",
             errno, __FILE__, __LINE__);
         exit(1);
     }
@@ -309,7 +309,7 @@ int pmgr_open_tree()
     /* create a socket to accept connection from parent */
     int sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (sockfd < 0) {
-        pmgr_error("Creating parent socket (socket() %m errno %d) @ file %s:%d",
+        pmgr_error("Creating parent socket (socket() %m errno=%d) @ file %s:%d",
             errno, __FILE__, __LINE__);
         exit(1);
     }
@@ -322,14 +322,14 @@ int pmgr_open_tree()
 
     /* bind socket */
     if (bind(sockfd, (struct sockaddr *) &sin, sizeof(sin)) < 0) {
-        pmgr_error("Binding parent socket (bind() %m errno %d) @ file %s:%d",
+        pmgr_error("Binding parent socket (bind() %m errno=%d) @ file %s:%d",
             errno, __FILE__, __LINE__);
         exit(1);
     }
 
     /* set the socket to listen for connections */
     if (listen(sockfd, 1) < 0) {
-        pmgr_error("Setting parent socket to listen (listen() %m errno %d) @ file %s:%d",
+        pmgr_error("Setting parent socket to listen (listen() %m errno=%d) @ file %s:%d",
             errno, __FILE__, __LINE__);
         exit(1);
     }
@@ -337,7 +337,7 @@ int pmgr_open_tree()
     /* ask which port the OS assigned our socket to */
     socklen_t len = sizeof(sin);
     if (getsockname(sockfd, (struct sockaddr *) &sin, &len) < 0) {
-        pmgr_error("Reading parent socket port number (getsockname() %m errno %d) @ file %s:%d",
+        pmgr_error("Reading parent socket port number (getsockname() %m errno=%d) @ file %s:%d",
             errno, __FILE__, __LINE__);
         exit(1);
     }
@@ -590,14 +590,14 @@ int pmgr_open()
 
     mpirun_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (mpirun_socket < 0) {
-        pmgr_error("Creating mpirun socket (socket() %m errno %d) @ file %s:%d",
+        pmgr_error("Creating mpirun socket (socket() %m errno=%d) @ file %s:%d",
             errno, __FILE__, __LINE__);
         exit(1);
     }
 
     struct hostent* mpirun_hostent = gethostbyname(mpirun_hostname);
     if (!mpirun_hostent) {
-        pmgr_error("gethostbyname(%s) failed: %s (h_errno %d) @ file %s:%d",
+        pmgr_error("(gethostbyname(%s) %s h_errno=%d) @ file %s:%d",
             mpirun_hostname, hstrerror(h_errno), h_errno, __FILE__, __LINE__);
         exit(1);
     }
@@ -607,7 +607,7 @@ int pmgr_open()
     sockaddr.sin_port = htons(mpirun_port);
 
     if (connect(mpirun_socket, (struct sockaddr *) &sockaddr, sizeof(sockaddr)) < 0) {
-        pmgr_error("Connecting mpirun socket (conenct() %m errno %d) @ file %s:%d",
+        pmgr_error("Connecting mpirun socket (conenct() %m errno=%d) @ file %s:%d",
             errno, __FILE__, __LINE__);
         exit(1);
     }
@@ -725,7 +725,7 @@ int pmgr_init(int *argc_p, char ***argv_p, int *np_p, int *me_p,
 
         str = strdup(pmgr_getenv("MPIRUN_PROCESSES", ENV_REQUIRED));
         if (str == NULL) {
-            pmgr_error("Can't allocate process list (strdup() %m errno %d) @ file %s:%d",
+            pmgr_error("Can't allocate process list (strdup() %m errno=%d) @ file %s:%d",
                 errno, __FILE__, __LINE__);
             exit(1);
         }
@@ -816,14 +816,14 @@ int pmgr_abort(int code, const char *fmt, ...)
 
     he = gethostbyname(mpirun_hostname);
     if (!he) {
-        pmgr_error("pmgr_abort: gethostbyname(%s) failed: %s (h_errno %d) @ file %s:%d",
+        pmgr_error("pmgr_abort: (gethostbyname(%s) %s h_errno=%d) @ file %s:%d",
             mpirun_hostname, hstrerror(h_errno), h_errno, __FILE__, __LINE__);
         return -1;
     }
 
     s = socket(AF_INET, SOCK_STREAM, 0);
     if (s < 0) {
-        pmgr_error("pmgr_abort: Failed to create socket: (socket() %m errno %d) @ file %s:%d",
+        pmgr_error("pmgr_abort: Failed to create socket: (socket() %m errno=%d) @ file %s:%d",
             errno, __FILE__, __LINE__);
         return -1;
     }
@@ -833,7 +833,7 @@ int pmgr_abort(int code, const char *fmt, ...)
     memcpy(&sin.sin_addr, he->h_addr_list[0], sizeof(sin.sin_addr));
     sin.sin_port = htons(mpirun_port);
     if (connect(s, (struct sockaddr *) &sin, sizeof(sin)) < 0) {
-        pmgr_error("pmgr_abort: Connect to mpirun failed (connect() %m errno %d) @ file %s:%d",
+        pmgr_error("pmgr_abort: Connect to mpirun failed (connect() %m errno=%d) @ file %s:%d",
             errno, __FILE__, __LINE__);
         return -1;
     }
