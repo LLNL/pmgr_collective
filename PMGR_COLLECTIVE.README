@@ -1,3 +1,6 @@
+Adam Moody <moody20@llnl.gov>
+Lawrence Livermore National Laboratory
+
 ====================================================
 PMGR_COLLECTIVE Overview
 ====================================================
@@ -64,9 +67,15 @@ The following variables must be set to define the client's MPI context:
   MPIRUN_HOST   - IP address of the mpirun process in dotted decimal notation
   MPIRUN_PORT   - port number of the mpirun process    must be >0
 
-Optional:
-  NOT_USE_TOTALVIEW
-    MPIRUN_PROCESSES - (required if NOT_USE_TOTALVIEW is set and != 0)
+These variables must be defined for backward compatibility:
+
+  MPIRUN_PROCESSES  - colon-separated list of host names indexed by rank number
+                      Required if NOT_USE_TOTALVIEW is not set
+  NOT_USE_TOTALVIEW - if this variable is set in the environment (its
+                      value doesn't matter), then MPIRUN_PROCESSES is not read
+
+This is not a scalable way to list this information as high numbers of hosts can
+exceed the environment variable string length limit.
 
 Debug statements can be turned on for troubleshooting or timing.  For each
 level of debug verbosity, there are two sublevels.  In the first sublevel,
@@ -141,4 +150,5 @@ A scalable PMI could probably be implemented on top of PMGR_COLLECTIVE using pmg
 Reliability could be added to retry or reestablish connections.
 
 As process counts increase higher and higher, at some point, mpirun itself will likely need
-to collect the IP:port entries via a tree network to build the socket table.
+to collect the IP:port entries via a tree network to build the socket table.  This could be
+done transparently from PMGR_COLLECTIVES point of view.
