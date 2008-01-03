@@ -53,6 +53,12 @@ extern int pmgr_me;
 
 extern int pmgr_echo_debug;
 
+/* Return the number of secs as a double between two timeval structs (tv2-tv1) */
+double pmgr_getsecs(struct timeval* tv2, struct timeval* tv1);
+
+/* Fills in timeval via gettimeofday */
+void pmgr_gettimeofday(struct timeval* tv);
+
 /* Reads environment variable, bails if not set */
 #define ENV_REQUIRED 0
 #define ENV_OPTIONAL 1

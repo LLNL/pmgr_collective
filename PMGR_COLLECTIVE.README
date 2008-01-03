@@ -68,23 +68,18 @@ Optional:
   NOT_USE_TOTALVIEW
     MPIRUN_PROCESSES - (required if NOT_USE_TOTALVIEW is set and != 0)
 
-It's possible to select the collective algorithms:
+Debug statements can be turned on for troubleshooting or timing.  For each
+level of debug verbosity, there are two sublevels.  In the first sublevel,
+just rank 0 and rank N-1 print information.  All ranks print debug statements
+in the second sublevel.
 
-  MPIRUN_USE_TREES={0,1}       - disable/enable all trees (disabling also avoids setup and teardown)
-  MPIRUN_USE_GATHER_TREE={0,1} - disable/enable gather tree
-  MPIRUN_USE_BCAST_TREE={0,1}  - disable/enable bcast tree
+  MPIRUN_CLIENT_DEBUG={0-6}
+    0                     - disable debug statements
 
-If a tree is disabled, then the collective will fallback to the mpirun
-support, which is typically a flat tree with the mpirun process at the root.
-
-By default, the TREE environment variables are all enabled.  The library can be
-built with these variables disabled by default.  To do this, define the appropriate
-macros on the compile line.  For example, to disable all by default, you'd include
-all of the following in your compile flags:
-
-  -DMPIRUN_USE_TREES=0
-  -DMPIRUN_USE_GATHER_TREE=0
-  -DMPIRUN_USE_BCAST_TREE=0
+    ranks[0,N]  all ranks
+    1           2         - includes pmgr_open to pmgr_close timing
+    3           4         - includes timing for each pmgr_* function
+    5           6         - denotes start and exit for each pmgr_* function
 
 ====================================================
 Current Implementation
@@ -116,6 +111,24 @@ flat tree with mpirun as the root.  These collectives thus scale linearly:
 
 This implementation works best if the TCP socket each task opens corresponds to a port
 on a switched network so that multiple nodes may send and receive data at the same time.
+
+It's possible to disable / enable the binomial tree at runtime:
+
+  MPIRUN_USE_TREES={0,1}       - disable/enable all trees (disabling also avoids setup and teardown)
+  MPIRUN_USE_GATHER_TREE={0,1} - disable/enable gather tree
+  MPIRUN_USE_BCAST_TREE={0,1}  - disable/enable bcast tree
+
+If a tree is disabled, then the collective will fallback to the mpirun
+support, which is typically a flat tree with the mpirun process at the root.
+
+By default, the TREE environment variables are all enabled.  The library can be
+built with these variables disabled by default.  To do this, define the appropriate
+macros on the compile line.  For example, to disable all by default, you'd include
+all of the following in your compile flags:
+
+  -DMPIRUN_USE_TREES=0
+  -DMPIRUN_USE_GATHER_TREE=0
+  -DMPIRUN_USE_BCAST_TREE=0
 
 ====================================================
 Ideas for Future Work (if the demand arises)

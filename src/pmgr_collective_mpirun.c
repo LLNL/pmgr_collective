@@ -35,21 +35,6 @@
 int* fd_by_rank;
 int  N;
 
-double pmgr_getsecs(struct timeval* tv2, struct timeval* tv1)
-{
-	struct timeval result;
-	timersub(tv2, tv1, &result);
-	return (double) result.tv_sec + (double) result.tv_usec / 1000000.0;
-}
-
-void pmgr_gettimeofday(struct timeval* tv)
-{
-	if (gettimeofday(tv, NULL) < 0) {
-		pmgr_error("getting time (gettimeofday() %m errno=%d)",
-			errno);
-	}
-}
-
 /* Write size bytes from buf into socket for rank */
 void pmgr_send(void* buf, int size, int rank)
 {

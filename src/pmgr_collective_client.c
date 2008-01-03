@@ -96,6 +96,9 @@ int  pmgr_num_child;      /* number of children */
 int* pmgr_child_incl;     /* number of children each child is responsible for (includes itself) */
 int  pmgr_num_child_incl; /* total number of children this node is responsible for */
 
+/* startup time, time between starting pmgr_open and finishing pmgr_close */
+struct timeval time_open, time_close;
+
 /*
  * =============================
  * Utility functions for use by other functions in this file
@@ -469,6 +472,10 @@ int pmgr_gather_tree(void* sendbuf, int sendcount, void* recvbuf)
 /* Perform barrier, each task writes an int then waits for an int */
 int pmgr_barrier()
 {
+    struct timeval start, end;
+    pmgr_gettimeofday(&start);
+    pmgr_debug(3, "Starting pmgr_barrier()");
+
     char c;
     void* recvbuf = NULL;
 
@@ -501,6 +508,8 @@ int pmgr_barrier()
         mpirun_barrier();
     }
 
+    pmgr_gettimeofday(&end);
+    pmgr_debug(2, "Exiting pmgr_barrier(), took %f seconds for %d procs", pmgr_getsecs(&end,&start), pmgr_nprocs);
     return PMGR_SUCCESS;
 }
 
@@ -510,13 +519,23 @@ int pmgr_barrier()
  */
 int pmgr_bcast(void* buf, int sendcount, int root)
 {
+    struct timeval start, end;
+    pmgr_gettimeofday(&start);
+    pmgr_debug(3, "Starting pmgr_bcast()");
+
+    int rc;
+
     /* if root is rank 0 and bcast tree is enabled, use it */
     /* (this is a common case) */
     if (root == 0 && mpirun_use_trees && mpirun_use_bcast_tree) {
-        return pmgr_bcast_tree(buf, sendcount);
+        rc = pmgr_bcast_tree(buf, sendcount);
+    } else {
+        rc = mpirun_bcast(buf, sendcount, root);
     }
 
-    return mpirun_bcast(buf, sendcount, root);
+    pmgr_gettimeofday(&end);
+    pmgr_debug(2, "Exiting pmgr_bcast(), took %f seconds for %d procs", pmgr_getsecs(&end,&start), pmgr_nprocs);
+    return rc;
 }
 
 /*
@@ -525,13 +544,23 @@ int pmgr_bcast(void* buf, int sendcount, int root)
  */
 int pmgr_gather(void* sendbuf, int sendcount, void* recvbuf, int root)
 {
+    struct timeval start, end;
+    pmgr_gettimeofday(&start);
+    pmgr_debug(3, "Starting pmgr_gather()");
+
+    int rc;
+
     /* if root is rank 0 and gather tree is enabled, use it */
     /* (this is a common case) */
     if (root == 0 && mpirun_use_trees && mpirun_use_gather_tree) {
-        return pmgr_gather_tree(sendbuf, sendcount, recvbuf);
+        rc = pmgr_gather_tree(sendbuf, sendcount, recvbuf);
+    } else {
+        rc = mpirun_gather(sendbuf, sendcount, recvbuf, root);
     }
 
-    return mpirun_gather(sendbuf, sendcount, recvbuf, root);
+    pmgr_gettimeofday(&end);
+    pmgr_debug(2, "Exiting pmgr_gather(), took %f seconds for %d procs", pmgr_getsecs(&end,&start), pmgr_nprocs);
+    return rc;
 }
 
 /*
@@ -540,7 +569,15 @@ int pmgr_gather(void* sendbuf, int sendcount, void* recvbuf, int root)
  */
 int pmgr_scatter(void* sendbuf, int sendcount, void* recvbuf, int root)
 {
-    return mpirun_scatter(sendbuf, sendcount, recvbuf, root);
+    struct timeval start, end;
+    pmgr_gettimeofday(&start);
+    pmgr_debug(3, "Starting pmgr_scatter()");
+
+    int rc = mpirun_scatter(sendbuf, sendcount, recvbuf, root);
+
+    pmgr_gettimeofday(&end);
+    pmgr_debug(2, "Exiting pmgr_scatter(), took %f seconds for %d procs", pmgr_getsecs(&end,&start), pmgr_nprocs);
+    return rc;
 }
 
 /*
@@ -549,6 +586,10 @@ int pmgr_scatter(void* sendbuf, int sendcount, void* recvbuf, int root)
  */
 int pmgr_allgather(void* sendbuf, int sendcount, void* recvbuf)
 {
+    struct timeval start, end;
+    pmgr_gettimeofday(&start);
+    pmgr_debug(3, "Starting pmgr_allgather()");
+
     if (mpirun_use_trees) {
         /* gather data to rank 0 */
         if (mpirun_use_gather_tree) {
@@ -568,6 +609,8 @@ int pmgr_allgather(void* sendbuf, int sendcount, void* recvbuf)
         mpirun_allgather(sendbuf, sendcount, recvbuf);
     }
 
+    pmgr_gettimeofday(&end);
+    pmgr_debug(2, "Exiting pmgr_allgather(), took %f seconds for %d procs", pmgr_getsecs(&end,&start), pmgr_nprocs);
     return PMGR_SUCCESS;
 }
 
@@ -577,7 +620,15 @@ int pmgr_allgather(void* sendbuf, int sendcount, void* recvbuf)
  */
 int pmgr_alltoall(void* sendbuf, int sendcount, void* recvbuf)
 {
-    return mpirun_alltoall(sendbuf, sendcount, recvbuf);
+    struct timeval start, end;
+    pmgr_gettimeofday(&start);
+    pmgr_debug(3, "Starting pmgr_alltoall()");
+
+    int rc = mpirun_alltoall(sendbuf, sendcount, recvbuf);
+
+    pmgr_gettimeofday(&end);
+    pmgr_debug(2, "Exiting pmgr_alltoall(), took %f seconds for %d procs", pmgr_getsecs(&end,&start), pmgr_nprocs);
+    return rc;
 }
 
 /*
@@ -586,6 +637,11 @@ int pmgr_alltoall(void* sendbuf, int sendcount, void* recvbuf)
  */
 int pmgr_open()
 {
+    struct timeval start, end;
+    pmgr_gettimeofday(&time_open);
+    pmgr_gettimeofday(&start);
+    pmgr_debug(3, "Starting pmgr_open()");
+
     struct sockaddr_in sockaddr;
 
     mpirun_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -630,6 +686,8 @@ int pmgr_open()
         pmgr_open_tree();
     }
 
+    pmgr_gettimeofday(&end);
+    pmgr_debug(2, "Exiting pmgr_open(), took %f seconds for %d procs", pmgr_getsecs(&end,&start), pmgr_nprocs);
     return PMGR_SUCCESS;
 }
 
@@ -638,6 +696,10 @@ int pmgr_open()
  */
 int pmgr_close()
 {
+    struct timeval start, end;
+    pmgr_gettimeofday(&start);
+    pmgr_debug(3, "Starting pmgr_close()");
+
     /* shut down the tree, if enabled */
     if (mpirun_use_trees) {
         pmgr_close_tree();
@@ -647,6 +709,11 @@ int pmgr_close()
     pmgr_write_int(PMGR_CLOSE);
     close(mpirun_socket);
 
+    pmgr_gettimeofday(&end);
+    pmgr_gettimeofday(&time_close);
+    pmgr_debug(2, "Exiting pmgr_close(), took %f seconds for %d procs", pmgr_getsecs(&end,&start), pmgr_nprocs);
+    pmgr_debug(1, "Total time from pmgr_open() to pmgr_close() took %f seconds for %d procs",
+        pmgr_getsecs(&time_close, &time_open), pmgr_nprocs);
     return PMGR_SUCCESS;
 }
 
@@ -669,18 +736,27 @@ int pmgr_init(int *argc_p, char ***argv_p, int *np_p, int *me_p,
     pmgr_me = -1;
     pmgr_echo_debug = 0;
 
-    /* Get information from environment, not from the argument list */
+    struct timeval start, end;
+    pmgr_gettimeofday(&start);
 
-    /* MPIRUN_DEBUG={0,1} disables/enables debug statements */
-    if ((value = pmgr_getenv("MPIRUN_DEBUG", ENV_OPTIONAL)) != NULL) {
-        pmgr_echo_debug = atoi(value);
-    }
+    /* Get information from environment, not from the argument list */
 
     /* MPI rank of current process */
     pmgr_me = atoi(pmgr_getenv("MPIRUN_RANK", ENV_REQUIRED));
 
     /* number of MPI processes in job */
     pmgr_nprocs = atoi(pmgr_getenv("MPIRUN_NPROCS", ENV_REQUIRED));
+
+    /* MPIRUN_CLIENT_DEBUG={0,1} disables/enables debug statements */
+    if ((value = pmgr_getenv("MPIRUN_CLIENT_DEBUG", ENV_OPTIONAL)) != NULL) {
+        pmgr_echo_debug = atoi(value);
+        if (pmgr_echo_debug > 0 && (pmgr_echo_debug % 2) == 1) {
+            /* for an odd setting, just print from rank 0 and N-1 */
+            pmgr_echo_debug = (pmgr_me == 0 || pmgr_me == pmgr_nprocs-1) ? pmgr_echo_debug+1 : 0;
+        }
+        pmgr_echo_debug >>= 1;
+    }
+    pmgr_debug(3, "Starting pmgr_init()");
 
     /* unique jobid of current application */
     pmgr_id = atoi(pmgr_getenv("MPIRUN_ID", ENV_REQUIRED));
@@ -769,6 +845,8 @@ int pmgr_init(int *argc_p, char ***argv_p, int *np_p, int *me_p,
     *id_p = pmgr_id;
     *processes_p = pmgr_processes;
 
+    pmgr_gettimeofday(&end);
+    pmgr_debug(2, "Exiting pmgr_init(), took %f seconds for %d procs", pmgr_getsecs(&end,&start), pmgr_nprocs);
     return PMGR_SUCCESS;
 }
 

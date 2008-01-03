@@ -1,3 +1,13 @@
+2008-01-03 Adam Moody <moody20@llnl.gov>
+
+	* src/pmgr_collective_common.h,
+	  src/pmgr_collective_common.c,
+	  src/pmgr_collective_client.c,
+	  src/pmgr_collective_mpirun.c : Moved pmgr_gettimeofday and pmgr_getsecs
+	  to common.
+
+	* src/pmgr_collective_common.c : Added debug statements to time pmgr_* calls.
+
 2008-01-02 Adam Moody <moody20@llnl.gov>
 
 	* makefile : Moved *.h files to src directory.  Have make copy them

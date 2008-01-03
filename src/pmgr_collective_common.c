@@ -22,6 +22,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/time.h>
 #include "pmgr_collective_common.h"
 
 /*
@@ -34,6 +35,23 @@
 int pmgr_me = -3;
 
 int pmgr_echo_debug = 0;
+
+/* Return the number of secs as a double between two timeval structs (tv2-tv1) */
+double pmgr_getsecs(struct timeval* tv2, struct timeval* tv1)
+{
+        struct timeval result;
+        timersub(tv2, tv1, &result);
+        return (double) result.tv_sec + (double) result.tv_usec / 1000000.0;
+}
+
+/* Fills in timeval via gettimeofday */
+void pmgr_gettimeofday(struct timeval* tv)
+{
+        if (gettimeofday(tv, NULL) < 0) {
+                pmgr_error("getting time (gettimeofday() %m errno=%d)",
+                        errno);
+        }
+}
 
 /* Reads environment variable, bails if not set */
 char* pmgr_getenv(char* envvar, int type)
