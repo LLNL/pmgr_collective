@@ -29,17 +29,34 @@
 #include <string.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <sys/time.h>
 #include "pmgr_collective_mpirun.h"
 
 int* fd_by_rank;
 int  N;
+
+double pmgr_getsecs(struct timeval* tv2, struct timeval* tv1)
+{
+	struct timeval result;
+	timersub(tv2, tv1, &result);
+	return (double) result.tv_sec + (double) result.tv_usec / 1000000.0;
+}
+
+void pmgr_gettimeofday(struct timeval* tv)
+{
+	if (gettimeofday(tv, NULL) < 0) {
+		pmgr_error("getting time (gettimeofday() %m errno %d)",
+			errno);
+	}
+}
 
 /* Write size bytes from buf into socket for rank */
 void pmgr_send(void* buf, int size, int rank)
 {
 	int fd = fd_by_rank[rank];
 	if (pmgr_write_fd(fd, buf, size) < 0) {
-		pmgr_error("error writing to rank %d (errno %d): file %s line %d", rank, errno, __FILE__, __LINE__);
+		pmgr_error("writing to rank %d (write() %m errno %d) @ file %s:%d",
+			rank, errno, __FILE__, __LINE__);
 	}
 }
 
@@ -48,7 +65,8 @@ void pmgr_recv(void* buf, int size, int rank)
 {
 	int fd = fd_by_rank[rank];
 	if (pmgr_read_fd(fd, buf, size) <= 0) {
-		pmgr_error("error reading from rank %d (errno %d): file %s line %d", rank, errno, __FILE__, __LINE__);
+		pmgr_error("reading from rank %d (read() %m errno %d) @ file %s:%d",
+			rank, errno, __FILE__, __LINE__);
 	}
 }
 
@@ -102,7 +120,7 @@ int set_current(int curr, int new)
 {
 	if (curr == -1) { curr = new; }
 	if (new != curr) {
-		pmgr_error("unexpected value: received %d, expecting %d: file %s line %d",
+		pmgr_error("unexpected value: received %d, expecting %d @ file %s:%d",
 			   new, curr, __FILE__, __LINE__);
 	}
 	return curr;
@@ -185,6 +203,9 @@ int pmgr_processops(int* fds, int nprocs)
   fd_by_rank = fds;
   N = nprocs;
 
+  struct timeval time_start, time_end, time_startop, time_endop;
+  pmgr_gettimeofday(&time_start);
+
   if ((value = pmgr_getenv("MPIRUN_DEBUG", ENV_OPTIONAL)) != NULL) {
     pmgr_echo_debug = atoi(value);
   }
@@ -198,6 +219,7 @@ int pmgr_processops(int* fds, int nprocs)
 	int root   = -1;
 	int size   = -1;
 	void* buf = NULL;
+        pmgr_gettimeofday(&time_startop);
 
 	/* for each process, read in one packet (opcode and its associated data) */
 	int i;
@@ -219,7 +241,7 @@ int pmgr_processops(int* fds, int nprocs)
 			case PMGR_ABORT: /* followed by exit code */
 				if (i==0) { pmgr_debug(1, "Receiving data for PMGR_ABORT"); }
 				code = pmgr_recv_int(i);
-				pmgr_error("received abort code %d from rank %d: file %s line %d", code, i, __FILE__, __LINE__);
+				pmgr_error("received abort code %d from rank %d @ file %s:%d", code, i, __FILE__, __LINE__);
 				break;
 			case PMGR_BARRIER: /* no data */
 				if (i==0) { pmgr_debug(1, "Receiving data for PMGR_BARRIER"); }
@@ -258,20 +280,23 @@ int pmgr_processops(int* fds, int nprocs)
 				pmgr_recv(buf + (size*N)*i, size * N, i);
 				break;
 			default:
-				pmgr_error("unrecognized PMGR_COLLECTIVE opcode: %d: file %s line %d", opcode, __FILE__, __LINE__);
+				pmgr_error("unrecognized PMGR_COLLECTIVE opcode: %d @ file %s:%d", opcode, __FILE__, __LINE__);
 		}
 	} /* end for each process, read in one packet (opcode and its associated data) */
 
 	/* Complete operation */
 	switch(opcode) {
 		case PMGR_OPEN:
+			pmgr_debug(1, "Sending data for PMGR_OPEN");
 			pmgr_debug(1, "Completed PMGR_OPEN");
 			break;
 		case PMGR_CLOSE:
+			pmgr_debug(1, "Sending data for PMGR_CLOSE");
 			pmgr_debug(1, "Completed PMGR_CLOSE");
 			exit = 1;
 			break;
 		case PMGR_ABORT:
+			pmgr_debug(1, "Sending data for PMGR_ABORT");
 			pmgr_debug(1, "Completed PMGR_ABORT");
 			exit = 1;
 			break;
@@ -306,13 +331,16 @@ int pmgr_processops(int* fds, int nprocs)
 			pmgr_debug(1, "Completed PMGR_ALLTOALL");
 			break;
 		default:
-			pmgr_error("unrecognized PMGR_COLLECTIVE opcode: %d: file %s line %d", opcode, __FILE__, __LINE__);
+			pmgr_error("unrecognized PMGR_COLLECTIVE opcode: %d @ file %s:%d", opcode, __FILE__, __LINE__);
 	} /* end switch(opcode) for Completing operations */
 
 	pmgr_free(buf);
+        pmgr_gettimeofday(&time_endop);
+        pmgr_debug(1, "Operation took %f seconds for %d procs", pmgr_getsecs(&time_endop, &time_startop), nprocs);
   } /* while(!exit) must be more opcodes to process */
 
-  pmgr_debug(1, "Completed processing PMGR opcodes");
+  pmgr_gettimeofday(&time_end);
+  pmgr_debug(1, "Completed processing PMGR opcodes; took %f seconds for %d procs", pmgr_getsecs(&time_end, &time_start), nprocs);
 
   return PMGR_SUCCESS;
 }

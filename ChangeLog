@@ -1,3 +1,25 @@
+2008-01-02 Adam Moody <moody20@llnl.gov>
+
+	* makefile : Moved *.h files to src directory.  Have make copy them
+	  to include directory on build.
+
+	* src/pmgr_collective_client.c,
+	  src/pmgr_collective_mpirun.c : Added filename and line number info
+	  to pmgr_error messages.
+
+	* src/pmgr_collective_mpirun.c : Added timers to debug statements.
+
+	* src/pmgr_collective_common.h,
+	  src/pmgr_collective_common.c : Added debug levels to pmgr_debug().
+
+	* test/mpirun_rsh.c : Added to test pmgr_processops functionality.
+
+	* test/client.c : Added pmgr_barrier() test.
+
+	* PMGR_COLLECTIVE.README : Added readme to describe pros and cons
+	  of current implemenation and to document build-time and run-time
+	  options.
+
 2007-12-28 Adam Moody <moody20@llnl.gov>
 
 	* : cleaning up code and adding more info to error messages.

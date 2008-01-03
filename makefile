@@ -14,12 +14,14 @@ all: clean
 	  ln -s libpmgr_collective.so.1     ../lib/libpmgr_collective.so && \
 	  cp *.h ../include
 	cd test && \
-	  gcc -g -O0 -o client client.c -I../include -L../lib -lpmgr_collective
+	  gcc -g -O0 -o client     client.c     -I../include -L../lib -lpmgr_collective && \
+	  gcc -g -O0 -o mpirun_rsh mpirun_rsh.c -I../include -L../lib -lpmgr_collective
 
 
 clean:
 	rm -rf src/*.o
-	rm -rf lib/*
+	rm -rf lib
+	rm -rf include
 	rm -rf test/*.o test/client
 
 lustre:
