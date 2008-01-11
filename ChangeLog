@@ -1,3 +1,20 @@
+2008-01-11 Adam Moody <moody20@llnl.gov>
+
+	* src/pmgr_collective_client.h,
+	  src/pmgr_collective_client.c : Dropped hostname string list
+	  from pmgr_init and corresponding MPIRUN_PROCESSES and
+	  NOT_USE_TOTALVIEW variables.  Added pmgr_allgatherstr to assist
+	  user in gathering this info through PMGR_COLLECTIVE calls.
+	  Added pmgr_allreducemaxint as a utility for pmgr_allgatherstr.
+
+	* test/client.c : Removed hostlist parameter from call to pmgr_init.
+
+	* test/mpirun_rsh.c : Removed code which sets MPIRUN_PROCESSES and
+	  NOT_USE_TOTALVIEW.
+
+	* PMGR_COLLECTIVE.README : Removed documentation about MPIRUN_PROCESSES
+	  and NOT_USE_TOTALVIEW.
+
 2008-01-03 Adam Moody <moody20@llnl.gov>
 
 	* src/pmgr_collective_common.h,
