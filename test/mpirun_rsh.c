@@ -244,7 +244,6 @@ static void show_version(void)
 int debug_on = 0, xterm_on = 0, show_on = 0;
 int param_debug = 0;
 int use_totalview = 0;
-char * mpirun_processes;
 static char display[200];
 
 static void get_display_str()
@@ -442,22 +441,6 @@ int main(int argc, char *argv[])
         }
     }
 
-    if(use_totalview) { 
-        mpirun_processes = (char*) safe_malloc(sizeof(char)
-                * nprocs * (hostname_len + 4));
-	memset(mpirun_processes, 0, nprocs * (hostname_len + 4));
-
-        for (i = 0; i < nprocs; ++i) {
-            strcat(mpirun_processes, plist[i].hostname);
-            strcat(mpirun_processes, ":");
-        }
-    } else {
-        /* If we are not using Totalview, then we
-         * need not do much */
-        mpirun_processes = (char *) safe_malloc(sizeof(char));
-        mpirun_processes[0] = '\0';
-    }
-   
     getcwd(wd, MAX_WD_LEN);
     gethostname(mpirun_host, MAX_HOST_LEN);
 
@@ -736,7 +719,7 @@ int start_process(int i, char *command_name, char *env)
 
     if(use_totalview) {
         str_len = strlen(command_name) + strlen(env) + strlen(wd) +
-            strlen(mpirun_processes) + strlen(device_port_env) + 512;
+            strlen(device_port_env) + 512;
     } else {
         str_len = strlen(command_name) + strlen(env) + strlen(wd) +
             strlen(device_port_env) + 530;
@@ -768,11 +751,7 @@ int start_process(int i, char *command_name, char *env)
                 nprocs, id, display,env,device_port_env);
     }
     
-    if(use_totalview) {
-        len = sprintf(remote_command, "%s MPIRUN_PROCESSES='%s' %s ", remote_command, mpirun_processes, command_name);
-    } else {
-        len = sprintf(remote_command, "%s NOT_USE_TOTALVIEW=1  %s ", remote_command, command_name);
-    }
+    len = sprintf(remote_command, "%s %s ", remote_command, command_name);
 
     if (len > str_len) {
 	    fprintf(stderr, "Internal error - overflowed remote_command\n");

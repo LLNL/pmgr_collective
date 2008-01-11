@@ -632,6 +632,86 @@ int pmgr_alltoall(void* sendbuf, int sendcount, void* recvbuf)
 }
 
 /*
+ * Perform MPI-like Allgather, each task writes sendcount bytes from sendbuf
+ * into mpirun_socket, then receives N*sendcount bytes into recvbuf
+ */
+int pmgr_allreducemaxint(int* sendint, int* recvint)
+{
+    struct timeval start, end;
+    pmgr_gettimeofday(&start);
+    pmgr_debug(3, "Starting pmgr_allreducemaxint()");
+
+    /* allocate space to receive ints from everyone */
+    int* all = NULL;
+    if (pmgr_me == 0) {
+        all = (int*) pmgr_malloc((size_t)pmgr_nprocs * sizeof(int), "One int for each task");
+    }
+
+    /* gather all ints to rank 0 */
+    pmgr_gather((void*) sendint, sizeof(int), (void*) all, 0);
+
+    /* rank 0 searches through list for maximum value */
+    int max = *sendint;
+    if (pmgr_me == 0) {
+        int i;
+        for (i=0; i<pmgr_nprocs; i++) {
+            if (all[i] > max) { max = all[i]; }
+        }
+        pmgr_free(all);
+    }
+
+    /* broadcast max int from rank 0 and set recvint */
+    pmgr_bcast((void*) &max, sizeof(int), 0);
+    *recvint = max;
+
+    pmgr_gettimeofday(&end);
+    pmgr_debug(2, "Exiting pmgr_allreducemaxint(), took %f seconds for %d procs", pmgr_getsecs(&end,&start), pmgr_nprocs);
+    return PMGR_SUCCESS;
+}
+
+/*
+ * Perform MPI-like Allgather, each task writes sendcount bytes from sendbuf
+ * into mpirun_socket, then receives N*sendcount bytes into recvbuf
+ */
+int pmgr_allgatherstr(char* sendstr, char*** recvstr, char** recvbuf)
+{
+    struct timeval start, end;
+    pmgr_gettimeofday(&start);
+    pmgr_debug(3, "Starting pmgr_allgatherstr()");
+
+    /* determine max length of send strings */
+    int mylen  = strlen(sendstr) + 1;
+    int maxlen = 0;
+    pmgr_allreducemaxint(&mylen, &maxlen);
+
+    /* pad my string to match max length */
+    char* mystr = (char*) pmgr_malloc(maxlen, "Padded String");
+    memset(mystr, '\0', maxlen);
+    strcpy(mystr, sendstr);
+
+    /* allocate enough buffer space to receive a maxlen string from all tasks */
+    char* stringbuf = (char*) pmgr_malloc(pmgr_nprocs * maxlen, "String Buffer");
+
+    /* gather strings from everyone */
+    pmgr_allgather((void*) mystr, maxlen, (void*) stringbuf);
+
+    /* set up array and free temporary maxlen string */
+    char** strings = (char **) pmgr_malloc(pmgr_nprocs * sizeof(char*), "Array of String Pointers");
+    int i;
+    for (i=0; i<pmgr_nprocs; i++) {
+        strings[i] = stringbuf + i*maxlen;
+    }
+    pmgr_free(mystr);
+
+    *recvstr = strings;
+    *recvbuf = stringbuf;
+
+    pmgr_gettimeofday(&end);
+    pmgr_debug(2, "Exiting pmgr_allgatherstr(), took %f seconds for %d procs", pmgr_getsecs(&end,&start), pmgr_nprocs);
+    return PMGR_SUCCESS;
+}
+
+/*
  * Open socket to mpirun launch process, then send protocol version and rank
  * number
  */
@@ -723,13 +803,8 @@ int pmgr_close()
  * =============================
  */
 
-int pmgr_init(int *argc_p, char ***argv_p, int *np_p, int *me_p,
-                     int *id_p, char ***processes_p)
+int pmgr_init(int *argc_p, char ***argv_p, int *np_p, int *me_p, int *id_p)
 {
-    char *str;
-    char *str_token;
-    char **pmgr_processes = NULL;
-    int i;
     setvbuf(stdout, NULL, _IONBF, 0);
     char *value;
 
@@ -795,36 +870,6 @@ int pmgr_init(int *argc_p, char ***argv_p, int *np_p, int *me_p,
         exit(1);
     }
 
-    /* list of hostnames running processes in job */
-    if ((value = pmgr_getenv("NOT_USE_TOTALVIEW", ENV_OPTIONAL)) == NULL) {
-        pmgr_processes = (char **) pmgr_malloc((size_t)pmgr_nprocs * sizeof(char*), "Process list");
-
-        str = strdup(pmgr_getenv("MPIRUN_PROCESSES", ENV_REQUIRED));
-        if (str == NULL) {
-            pmgr_error("Can't allocate process list (strdup() %m errno=%d) @ file %s:%d",
-                errno, __FILE__, __LINE__);
-            exit(1);
-        }
-
-        for (i = 0; i < pmgr_nprocs; i++) {
-            if (!str) {
-                pmgr_error("Invalid MPIRUN process list: '%s' @ file %s:%d",
-                    pmgr_getenv("MPIRUN_PROCESSES", ENV_REQUIRED), __FILE__, __LINE__);
-                exit(1);
-            }
-
-            str_token = strchr(str, ':');
-            if(str_token) *str_token = ' ';
-
-            pmgr_processes[i] = str;
-            str = strchr(str, ' ');
-            if (str) {
-                *str = '\0';
-                str++;
-            }
-        }
-    }
- 
     /* MPIRUN_USE_TREES={0,1} disables/enables tree algorithms */
     if ((value = pmgr_getenv("MPIRUN_USE_TREES", ENV_OPTIONAL))) {
         mpirun_use_trees = atoi(value);
@@ -843,7 +888,6 @@ int pmgr_init(int *argc_p, char ***argv_p, int *np_p, int *me_p,
     *np_p = pmgr_nprocs;
     *me_p = pmgr_me;
     *id_p = pmgr_id;
-    *processes_p = pmgr_processes;
 
     pmgr_gettimeofday(&end);
     pmgr_debug(2, "Exiting pmgr_init(), took %f seconds for %d procs", pmgr_getsecs(&end,&start), pmgr_nprocs);

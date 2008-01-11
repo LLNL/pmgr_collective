@@ -54,6 +54,12 @@ int pmgr_allgather(void* sendbuf, int sendcount, void* recvbuf);
 /* each task sends N*sendcount bytes from sendbuf and receives N*sendcount bytes into recvbuf */
 int pmgr_alltoall (void* sendbuf, int sendcount, void* recvbuf);
 
+/* each task passes in a NULL-terminated string, and receives an array of NULL-terminated strings
+ * indexed by rank.  This array should be freed by calling free(recvstr) and free(recvbuf) when
+ * it is no longer needed
+ */
+int pmgr_allgatherstr(char* sendstr, char*** recvstr, char** recvbuf);
+
 /*
  * This function is called by each process in the job during
  * initialization.  Pointers to argc and argv are passes
@@ -65,8 +71,7 @@ int pmgr_alltoall (void* sendbuf, int sendcount, void* recvbuf);
  *    *id_p     = the global ID associated with this job.
  */
 int pmgr_init(int *argc_p, char ***argv_p,
-	int *np_p, int *me_p, int *id_p,
-	char ***processes_p);
+	int *np_p, int *me_p, int *id_p);
 
 int pmgr_finalize(void);
 
