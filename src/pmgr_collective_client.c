@@ -632,8 +632,7 @@ int pmgr_alltoall(void* sendbuf, int sendcount, void* recvbuf)
 }
 
 /*
- * Perform MPI-like Allgather, each task writes sendcount bytes from sendbuf
- * into mpirun_socket, then receives N*sendcount bytes into recvbuf
+ * Perform MPI-like Allreduce maximum of a single int from each task
  */
 int pmgr_allreducemaxint(int* sendint, int* recvint)
 {
@@ -670,8 +669,22 @@ int pmgr_allreducemaxint(int* sendint, int* recvint)
 }
 
 /*
- * Perform MPI-like Allgather, each task writes sendcount bytes from sendbuf
- * into mpirun_socket, then receives N*sendcount bytes into recvbuf
+ * Perform MPI-like Allgather of NULL-terminated strings (whose lengths may vary
+ * from task to task).
+ *
+ * Each task provides a pointer to its NULL-terminated string as input.
+ * Each task then receives an array of pointers to strings indexed by rank number
+ * and also a pointer to the buffer holding the string data.
+ * When done with the strings, both the array of string pointers and the
+ * buffer should be freed.
+ *
+ * Example Usage:
+ *   char host[256], **hosts, *buf;
+ *   gethostname(host, sizeof(host));
+ *   pmgr_allgatherstr(host, &hosts, &buf);
+ *   for(int i=0; i<nprocs; i++) { printf("rank %d runs on host %s\n", i, hosts[i]); }
+ *   free(hosts);
+ *   free(buf);
  */
 int pmgr_allgatherstr(char* sendstr, char*** recvstr, char** recvbuf)
 {

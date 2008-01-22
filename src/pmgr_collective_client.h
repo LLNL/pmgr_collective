@@ -54,9 +54,23 @@ int pmgr_allgather(void* sendbuf, int sendcount, void* recvbuf);
 /* each task sends N*sendcount bytes from sendbuf and receives N*sendcount bytes into recvbuf */
 int pmgr_alltoall (void* sendbuf, int sendcount, void* recvbuf);
 
-/* each task passes in a NULL-terminated string, and receives an array of NULL-terminated strings
- * indexed by rank.  This array should be freed by calling free(recvstr) and free(recvbuf) when
- * it is no longer needed
+/*
+ * Perform MPI-like Allgather of NULL-terminated strings (whose lengths may vary
+ * from task to task).
+ *
+ * Each task provides a pointer to its NULL-terminated string as input.
+ * Each task then receives an array of pointers to strings indexed by rank number
+ * and also a pointer to the buffer holding the string data.
+ * When done with the strings, both the array of string pointers and the
+ * buffer should be freed.
+ *
+ * Example Usage:
+ *   char host[256], **hosts, *buf;
+ *   gethostname(host, sizeof(host));
+ *   pmgr_allgatherstr(host, &hosts, &buf);
+ *   for(int i=0; i<nprocs; i++) { printf("rank %d runs on host %s\n", i, hosts[i]); }
+ *   free(hosts);
+ *   free(buf);
  */
 int pmgr_allgatherstr(char* sendstr, char*** recvstr, char** recvbuf);
 
