@@ -5,6 +5,8 @@
 	  timeout.  The default TCP timeout was causing problems at 8192+
 	  task counts.
 
+	* PMGR_COLLECTIVE.README : Added note about pmgr_connect variables.
+
 2008-01-11 Adam Moody <moody20@llnl.gov>
 
 	* src/pmgr_collective_client.h,

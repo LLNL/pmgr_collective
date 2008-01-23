@@ -67,6 +67,23 @@ The following variables must be set to define the client's MPI context:
   MPIRUN_HOST   - IP address of the mpirun process in dotted decimal notation
   MPIRUN_PORT   - port number of the mpirun process    must be >0
 
+The following variables may be set to configure the connection to
+the mpirun task:
+
+  MPIRUN_CONNECT_TIMEOUT - number of seconds before connect attempt
+                           times out (default 2)
+  MPIRUN_CONNECT_BACKOFF - maximum number of seconds to wait before
+                           retrying connect (default 5)
+  MPIRUN_CONNECT_TRIES   - number of times to attempt connect before
+                           aborting (default 7)
+
+The above defaults may be changed by defining the appropriate macros
+at compile time, for example:
+
+  -DMPIRUN_CONNECT_TIMEOUT=5
+  -DMPIRUN_CONNECT_BACKOFF=10
+  -DMPIRUN_CONNECT_TRIES=20
+ 
 Debug statements can be turned on for troubleshooting or timing.  For each
 level of debug verbosity, there are two sublevels.  In the first sublevel,
 just rank 0 and rank N-1 print information.  All ranks print debug statements
