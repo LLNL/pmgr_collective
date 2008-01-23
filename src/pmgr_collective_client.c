@@ -64,6 +64,9 @@
 #include <netdb.h>
 #include <errno.h>
 #include <stdarg.h>
+#include <poll.h>
+#include <fcntl.h>
+#include <sys/time.h>
 #include "pmgr_collective_client.h"
 
 /* set env variable to select which trees to use, if any -- all enabled by default */
@@ -76,15 +79,32 @@
 #ifndef MPIRUN_USE_BCAST_TREE
 #define MPIRUN_USE_BCAST_TREE (1)
 #endif
-int mpirun_use_trees       = MPIRUN_USE_TREES;       /* set envvar MPIRUN_USE_TREES={0,1} to disable/enable tree algorithms */
-int mpirun_use_gather_tree = MPIRUN_USE_GATHER_TREE; /* set envvar MPIRUN_USE_GATHER_TREE={0,1} to disable/enable gather tree */
-int mpirun_use_bcast_tree  = MPIRUN_USE_BCAST_TREE;  /* set envvar MPIRUN_USE_BCAST_TREE={0,1} to disable/enable bcast tree */
+
+#ifndef MPIRUN_CONNECT_TRIES
+#define MPIRUN_CONNECT_TRIES (7)
+#endif
+#ifndef MPIRUN_CONNECT_TIMEOUT
+#define MPIRUN_CONNECT_TIMEOUT (2) /* seconds */
+#endif
+#ifndef MPIRUN_CONNECT_BACKOFF
+#define MPIRUN_CONNECT_BACKOFF (5) /* seconds */
+#endif
+
+/* set envvar MPIRUN_USE_TREES={0,1} to disable/enable tree algorithms */
+int mpirun_use_trees       = MPIRUN_USE_TREES;
+/* set envvar MPIRUN_USE_GATHER_TREE={0,1} to disable/enable gather tree */
+int mpirun_use_gather_tree = MPIRUN_USE_GATHER_TREE;
+/* set envvar MPIRUN_USE_BCAST_TREE={0,1} to disable/enable bcast tree */
+int mpirun_use_bcast_tree  = MPIRUN_USE_BCAST_TREE;
+
+int mpirun_connect_tries    = MPIRUN_CONNECT_TRIES;
+int mpirun_connect_timeout  = MPIRUN_CONNECT_TIMEOUT; /* seconds */
+int mpirun_connect_backoff  = MPIRUN_CONNECT_BACKOFF; /* seconds */
 
 char* mpirun_hostname;
 int   mpirun_port;
 int   mpirun_socket;
 int   pmgr_nprocs = -1;
-/*int   pmgr_me     = -1; */ /* moved to pmgr_collective_client */
 int   pmgr_id     = -1;
 
 /* tree data structures */
@@ -246,28 +266,123 @@ int mpirun_alltoall(void* sendbuf, int sendcount, void* recvbuf)
  * =============================
 */
 
-/* connect to given IP:port and return opened socket file descriptor */
+/* Open a connection on socket FD to peer at ADDR (which LEN bytes long).
+ * This function uses a non-blocking filedescriptor for the connect(),
+ * and then does a bounded poll() for the connection to complete.  This
+ * allows us to timeout the connect() earlier than TCP might do it on
+ * its own.  We have seen timeouts that failed after several minutes,
+ * where we would really prefer to time out earlier and retry the connect.
+ *
+ * Return 0 on success, -1 for errors.
+ */
+static int pmgr_connect_w_timeout (int fd, struct sockaddr const * addr,
+                                   socklen_t len, int millisec)
+{
+    int rc, flags, err, err_len;
+    struct pollfd ufds;
+
+    flags = fcntl(fd, F_GETFL);
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+
+    err = 0;
+    rc = connect(fd , addr , len);
+    if (rc < 0 && errno != EINPROGRESS) {
+        return -1;
+    }
+    if (rc == 0) {
+        goto done;  /* connect completed immediately */
+    }
+
+    ufds.fd = fd;
+    ufds.events = POLLIN | POLLOUT;
+    ufds.revents = 0;
+
+again:	rc = poll(&ufds, 1, millisec);
+    if (rc == -1) {
+        /* poll failed */
+        if (errno == EINTR) {
+            /* NOTE: connect() is non-interruptible in Linux */
+            pmgr_error("EINTR while polling connection: (poll() %m errno=%d) @ file %s:%d",
+                errno, __FILE__, __LINE__);
+            goto again;
+        } else {
+            pmgr_error("Polling connection: (poll() %m errno=%d) @ file %s:%d",
+                errno, __FILE__, __LINE__);
+        }
+        return -1;
+    } else if (rc == 0) {
+        /* poll timed out before any socket events */
+        /* perror("pmgr_connect_w_timeout poll timeout"); */
+        return -1;
+    } else {
+        /* poll saw some event on the socket
+         * We need to check if the connection succeeded by
+         * using getsockopt.  The revent is not necessarily
+         * POLLERR when the connection fails! */
+        err_len = sizeof(err);
+        if (getsockopt(fd, SOL_SOCKET, SO_ERROR,
+                       &err, &err_len) < 0)
+        {
+            return -1; /* solaris pending error */
+        }
+    }
+
+done:
+    fcntl(fd, F_SETFL, flags);
+
+    /* NOTE: Connection refused is typically reported for
+     * non-responsived nodes plus attempts to communicate
+     * with terminated launcher. */
+    if (err) {
+        pmgr_error("Error on socket in pmgr_connect_w_timeout() @ file %s:%d",
+            __FILE__, __LINE__);
+        return -1;
+    }
+ 
+    return 0;
+}
+
+/* Connect to given IP:port.  Upon successful connection, pmgr_connect
+ * shall return the connected socket file descriptor.  Otherwise, -1 shall be
+ * returned.
+ */
 int pmgr_connect(struct in_addr ip, int port)
 {
-    /* set up address to connect to */
     struct sockaddr_in sockaddr;
+    int sockfd;
+    int i;
+
+    /* set up address to connect to */
     sockaddr.sin_family = AF_INET;
     sockaddr.sin_addr = ip;
     sockaddr.sin_port = port;
 
-    /* create a socket */
-    int sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (sockfd < 0) {
-        pmgr_error("Creating socket: (socket() %m errno=%d) @ file %s:%d",
-            errno, __FILE__, __LINE__);
-        exit(1);
-    }
+    /* Try making the connection several times, with a random backoff
+       between tries. */
+    for (i = 0; ; i++) {
+        /* create a socket */
+        sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (sockfd < 0) {
+            pmgr_error("Creating socket (socket() %m errno=%d) @ file %s:%d",
+                errno, __FILE__, __LINE__);
+            return -1;
+        }
 
-    /* connect socket to address */
-    if (connect(sockfd, (struct sockaddr *) &sockaddr, sizeof(sockaddr)) < 0) {
-        pmgr_error("Connecting socket (connect() %m errno=%d) @ file %s:%d",
-            errno, __FILE__, __LINE__);
-        exit(1);
+        /* connect socket to address */
+        if (pmgr_connect_w_timeout(sockfd, (struct sockaddr *) &sockaddr,
+                              sizeof(sockaddr), mpirun_connect_timeout * 1000) < 0) {
+            if (i >= mpirun_connect_tries) {
+                pmgr_error("Connecting socket: pmgr_connect_w_timeout() failed @ file %s:%d",
+                    __FILE__, __LINE__);
+                close(sockfd);
+                return -1;
+            } else {
+                close(sockfd);
+                usleep(((rand() % (mpirun_connect_backoff * 1000)) + 1) * 1000);
+            }
+        } else {
+            break;
+        }
     }
 
     return sockfd;
@@ -380,6 +495,11 @@ int pmgr_open_tree()
         struct in_addr child_ip = * (struct in_addr *)  ((char*)recvbuf + sendcount*c);
         short child_port = * (short*) ((char*)recvbuf + sendcount*c + sizeof(ip));
         pmgr_child_s[i] = pmgr_connect(child_ip, child_port);
+        if (pmgr_child_s[i] == -1) {
+            pmgr_error("Connecting to child failed (rank %d) @ file %s:%d",
+                c, __FILE__, __LINE__);
+            exit(1);
+        }
         pmgr_write_fd(pmgr_child_s[i], recvbuf, sendcount * pmgr_nprocs);
     }
 
@@ -735,15 +855,6 @@ int pmgr_open()
     pmgr_gettimeofday(&start);
     pmgr_debug(3, "Starting pmgr_open()");
 
-    struct sockaddr_in sockaddr;
-
-    mpirun_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (mpirun_socket < 0) {
-        pmgr_error("Creating mpirun socket (socket() %m errno=%d) @ file %s:%d",
-            errno, __FILE__, __LINE__);
-        exit(1);
-    }
-
     struct hostent* mpirun_hostent = gethostbyname(mpirun_hostname);
     if (!mpirun_hostent) {
         pmgr_error("(gethostbyname(%s) %s h_errno=%d) @ file %s:%d",
@@ -751,13 +862,16 @@ int pmgr_open()
         exit(1);
     }
 
-    sockaddr.sin_family = AF_INET;
-    sockaddr.sin_addr = *(struct in_addr *) (*mpirun_hostent->h_addr_list);
-    sockaddr.sin_port = htons(mpirun_port);
+    /* seed srand used for random backoff in pmgr_connect later */
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    srand(tv.tv_usec + pmgr_me);
 
-    if (connect(mpirun_socket, (struct sockaddr *) &sockaddr, sizeof(sockaddr)) < 0) {
-        pmgr_error("Connecting mpirun socket (conenct() %m errno=%d) @ file %s:%d",
-            errno, __FILE__, __LINE__);
+    mpirun_socket = pmgr_connect(*(struct in_addr *) (*mpirun_hostent->h_addr_list),
+                                 htons(mpirun_port));
+    if (mpirun_socket == -1) {
+        pmgr_error("Connecting mpirun socket failed @ file %s:%d",
+            __FILE__, __LINE__);
         exit(1);
     }
 
@@ -896,6 +1010,20 @@ int pmgr_init(int *argc_p, char ***argv_p, int *np_p, int *me_p, int *id_p)
     /* MPIRUN_USE_BCAST_TREE={0,1} disables/enables bcast tree */
     if ((value = pmgr_getenv("MPIRUN_USE_BCAST_TREE", ENV_OPTIONAL))) {
         mpirun_use_bcast_tree = atoi(value);
+    }
+
+    if ((value = pmgr_getenv("MPIRUN_CONNECT_TRIES", ENV_OPTIONAL))) {
+            mpirun_connect_tries = atoi(value);
+    }
+
+    /* seconds */
+    if ((value = pmgr_getenv("MPIRUN_CONNECT_TIMEOUT", ENV_OPTIONAL))) {
+            mpirun_connect_timeout = atoi(value);
+    }
+
+    /* seconds */
+    if ((value = pmgr_getenv("MPIRUN_CONNECT_BACKOFF", ENV_OPTIONAL))) {
+            mpirun_connect_backoff = atoi(value);
     }
 
     *np_p = pmgr_nprocs;

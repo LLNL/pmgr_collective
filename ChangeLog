@@ -1,3 +1,10 @@
+2008-01-22 Adam Moody <moody20@llnl.gov>
+
+	* src/pmgr_collective_client.c : Integrated patch from Chris Morrone
+	  to poll on connection and retry with backoff on configurable
+	  timeout.  The default TCP timeout was causing problems at 8192+
+	  task counts.
+
 2008-01-11 Adam Moody <moody20@llnl.gov>
 
 	* src/pmgr_collective_client.h,
