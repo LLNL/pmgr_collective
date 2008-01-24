@@ -1,3 +1,7 @@
+2008-01-23 Adam Moody <moody20@llnl.gov>
+
+	* src/pmgr_collective_mpirun.c : Replaced tab indents with spaces (code cleanup).
+
 2008-01-22 Adam Moody <moody20@llnl.gov>
 
 	* src/pmgr_collective_client.c : Integrated patch from Chris Morrone

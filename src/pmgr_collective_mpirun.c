@@ -38,77 +38,79 @@ int  N;
 /* Write size bytes from buf into socket for rank */
 void pmgr_send(void* buf, int size, int rank)
 {
-	int fd = fd_by_rank[rank];
-	if (pmgr_write_fd(fd, buf, size) < 0) {
-		pmgr_error("writing to rank %d (write() %m errno=%d) @ file %s:%d",
-			rank, errno, __FILE__, __LINE__);
-	}
+    int fd = fd_by_rank[rank];
+    if (pmgr_write_fd(fd, buf, size) < 0) {
+        pmgr_error("writing to rank %d (write() %m errno=%d) @ file %s:%d",
+            rank, errno, __FILE__, __LINE__);
+    }
 }
 
 /* Read size bytes from socket for rank into buf */
 void pmgr_recv(void* buf, int size, int rank)
 {
-	int fd = fd_by_rank[rank];
-	if (pmgr_read_fd(fd, buf, size) <= 0) {
-		pmgr_error("reading from rank %d (read() %m errno=%d) @ file %s:%d",
-			rank, errno, __FILE__, __LINE__);
-	}
+    int fd = fd_by_rank[rank];
+    if (pmgr_read_fd(fd, buf, size) <= 0) {
+        pmgr_error("reading from rank %d (read() %m errno=%d) @ file %s:%d",
+            rank, errno, __FILE__, __LINE__);
+    }
 }
 
 /* Read an integer from socket for rank */
 int pmgr_recv_int(int rank)
 {
-	int buf;
-	pmgr_recv(&buf, sizeof(buf), rank);
-	return buf;
+   int buf;
+   pmgr_recv(&buf, sizeof(buf), rank);
+   return buf;
 }
 
 /* Scatter data in buf to ranks using chunks of size bytes */
 void pmgr_scatterbcast(void* buf, int size)
 {
-	int i;
-	for (i = 0; i < N; i++) {
-		pmgr_send(buf + i*size, size, i);
-	}
+    int i;
+    for (i = 0; i < N; i++) {
+        pmgr_send(buf + i*size, size, i);
+    }
 }
 
 /* Broadcast buf, which is size bytes big, to each rank */
 void pmgr_allgatherbcast(void* buf, int size)
 {
-	int i;
-	for (i = 0; i < N; i++) {
-		pmgr_send(buf, size, i);
-	}
+    int i;
+    for (i = 0; i < N; i++) {
+        pmgr_send(buf, size, i);
+    }
 }
 
 /* Perform alltoall using data in buf with elements of size bytes */
 void pmgr_alltoallbcast(void* buf, int size)
 {
-	int pbufsize = size * N;
-	void* pbuf = (void*) pmgr_malloc(pbufsize, "Temporary buffer for alltoall");	
+    int pbufsize = size * N;
+    void* pbuf = (void*) pmgr_malloc(pbufsize, "Temporary buffer for alltoall");
 
-	int i, src;
-	for (i = 0; i < N; i++) {
-		for (src = 0; src < N; src++) {
-			memcpy( pbuf + size*src,
-				buf  + size*(src*N + i),
-				size );
-		}
-		pmgr_send(pbuf, pbufsize, i);
-	}
-	
-	pmgr_free(pbuf);
+    int i, src;
+    for (i = 0; i < N; i++) {
+        for (src = 0; src < N; src++) {
+            memcpy(pbuf + size*src,
+                   buf  + size*(src*N + i),
+                   size);
+        }
+        pmgr_send(pbuf, pbufsize, i);
+    }
+
+    pmgr_free(pbuf);
 }
 
 /* Check that new == curr value if curr has been initialized (-1 == uninitialized) */
 int set_current(int curr, int new)
 {
-	if (curr == -1) { curr = new; }
-	if (new != curr) {
-		pmgr_error("unexpected value: received %d, expecting %d @ file %s:%d",
-			   new, curr, __FILE__, __LINE__);
-	}
-	return curr;
+    if (curr == -1) {
+        curr = new;
+    }
+    if (new != curr) {
+        pmgr_error("unexpected value: received %d, expecting %d @ file %s:%d",
+            new, curr, __FILE__, __LINE__);
+    }
+    return curr;
 }
 
 /*
@@ -182,150 +184,150 @@ int set_current(int curr, int new)
 */
 int pmgr_processops(int* fds, int nprocs)
 {
-  pmgr_me = -2;
-  pmgr_echo_debug = 0;
-  char* value;
-  fd_by_rank = fds;
-  N = nprocs;
+    pmgr_me = -2;
+    pmgr_echo_debug = 0;
+    char* value;
+    fd_by_rank = fds;
+    N = nprocs;
 
-  struct timeval time_start, time_end, time_startop, time_endop;
-  pmgr_gettimeofday(&time_start);
+    struct timeval time_start, time_end, time_startop, time_endop;
+    pmgr_gettimeofday(&time_start);
 
-  if ((value = pmgr_getenv("MPIRUN_DEBUG", ENV_OPTIONAL)) != NULL) {
-    pmgr_echo_debug = atoi(value);
-  }
+    if ((value = pmgr_getenv("MPIRUN_DEBUG", ENV_OPTIONAL)) != NULL) {
+        pmgr_echo_debug = atoi(value);
+    }
 
-  pmgr_debug(1, "Processing PMGR opcodes");
+    pmgr_debug(1, "Processing PMGR opcodes");
 
-  /* Until a 'CLOSE' or 'ABORT' message is seen, we continuously loop processing ops */
-  int exit = 0;
-  while (!exit) {
-	int opcode = -1;
-	int root   = -1;
-	int size   = -1;
-	void* buf = NULL;
+    /* Until a 'CLOSE' or 'ABORT' message is seen, we continuously loop processing ops */
+    int exit = 0;
+    while (!exit) {
+        int opcode = -1;
+        int root   = -1;
+        int size   = -1;
+        void* buf = NULL;
         pmgr_gettimeofday(&time_startop);
 
-	/* for each process, read in one packet (opcode and its associated data) */
-	int i;
-	for (i = 0; i < N; i++) {
-		/* read in opcode */
-		opcode = set_current(opcode, pmgr_recv_int(i));
+        /* for each process, read in one packet (opcode and its associated data) */
+        int i;
+        for (i = 0; i < N; i++) {
+            /* read in opcode */
+            opcode = set_current(opcode, pmgr_recv_int(i));
 
-		/* read in additional data depending on current opcode */
-		int rank, code;
-		switch(opcode) {
-			case PMGR_OPEN: /* followed by rank */
-				if (i==0) { pmgr_debug(1, "Receiving data for PMGR_OPEN"); }
-				rank = pmgr_recv_int(i);
-				break;
-			case PMGR_CLOSE: /* no data, close the socket */
-				if (i==0) { pmgr_debug(1, "Receiving data for PMGR_CLOSE"); }
-				close(fd_by_rank[i]);
-				break;
-			case PMGR_ABORT: /* followed by exit code */
-				if (i==0) { pmgr_debug(1, "Receiving data for PMGR_ABORT"); }
-				code = pmgr_recv_int(i);
-				pmgr_error("received abort code %d from rank %d @ file %s:%d", code, i, __FILE__, __LINE__);
-				break;
-			case PMGR_BARRIER: /* no data */
-				if (i==0) { pmgr_debug(1, "Receiving data for PMGR_BARRIER"); }
-				break;
-			case PMGR_BCAST: /* root, size of message, then message data (from root only) */
-				if (i==0) { pmgr_debug(1, "Receiving data for PMGR_BCAST"); }
-				root = set_current(root, pmgr_recv_int(i));
-				size = set_current(size, pmgr_recv_int(i));
-				if (!buf) { buf = (void*) pmgr_malloc(size, "Bcast buffer"); }
-				if (i == root) { pmgr_recv(buf, size, i); }
-				break;
-			case PMGR_GATHER: /* root, size of message, then message data */
-				if (i==0) { pmgr_debug(1, "Receiving data for PMGR_GATHER"); }
-				root = set_current(root, pmgr_recv_int(i));
-				size = set_current(size, pmgr_recv_int(i));
-				if (!buf) { buf = (void*) pmgr_malloc(size * N, "Gather buffer"); }
-				pmgr_recv(buf + size*i, size, i);
-				break;
-			case PMGR_SCATTER: /* root, size of message, then message data */
-				if (i==0) { pmgr_debug(1, "Receiving data for PMGR_SCATTER"); }
-				root = set_current(root, pmgr_recv_int(i));
-				size = set_current(size, pmgr_recv_int(i));
-				if (!buf) { buf = (void*) pmgr_malloc(size * N, "Scatter buffer"); }
-				if (i == root) { pmgr_recv(buf, size * N, i); }
-				break;
-			case PMGR_ALLGATHER: /* size of message, then message data */
-				if (i==0) { pmgr_debug(1, "Receiving data for PMGR_ALLGATHER"); }
-				size = set_current(size, pmgr_recv_int(i));
-				if (!buf) { buf = (void*) pmgr_malloc(size * N, "Allgather buffer"); }
-				pmgr_recv(buf + size*i, size, i);
-				break;
-			case PMGR_ALLTOALL: /* size of message, then message data */
-				if (i==0) { pmgr_debug(1, "Receiving data for PMGR_ALLTOALL"); }
-				size = set_current(size, pmgr_recv_int(i));
-				if (!buf) { buf = (void*) pmgr_malloc(size * N * N, "Alltoall buffer"); }
-				pmgr_recv(buf + (size*N)*i, size * N, i);
-				break;
-			default:
-				pmgr_error("unrecognized PMGR_COLLECTIVE opcode: %d @ file %s:%d", opcode, __FILE__, __LINE__);
-		}
-	} /* end for each process, read in one packet (opcode and its associated data) */
+            /* read in additional data depending on current opcode */
+            int rank, code;
+            switch(opcode) {
+                case PMGR_OPEN: /* followed by rank */
+                    if (i==0) { pmgr_debug(1, "Receiving data for PMGR_OPEN"); }
+                    rank = pmgr_recv_int(i);
+                    break;
+                case PMGR_CLOSE: /* no data, close the socket */
+                    if (i==0) { pmgr_debug(1, "Receiving data for PMGR_CLOSE"); }
+                    close(fd_by_rank[i]);
+                    break;
+                case PMGR_ABORT: /* followed by exit code */
+                    if (i==0) { pmgr_debug(1, "Receiving data for PMGR_ABORT"); }
+                    code = pmgr_recv_int(i);
+                    pmgr_error("received abort code %d from rank %d @ file %s:%d", code, i, __FILE__, __LINE__);
+                    break;
+                case PMGR_BARRIER: /* no data */
+                    if (i==0) { pmgr_debug(1, "Receiving data for PMGR_BARRIER"); }
+                    break;
+                case PMGR_BCAST: /* root, size of message, then message data (from root only) */
+                    if (i==0) { pmgr_debug(1, "Receiving data for PMGR_BCAST"); }
+                    root = set_current(root, pmgr_recv_int(i));
+                    size = set_current(size, pmgr_recv_int(i));
+                    if (!buf) { buf = (void*) pmgr_malloc(size, "Bcast buffer"); }
+                    if (i == root) { pmgr_recv(buf, size, i); }
+                    break;
+                case PMGR_GATHER: /* root, size of message, then message data */
+                    if (i==0) { pmgr_debug(1, "Receiving data for PMGR_GATHER"); }
+                    root = set_current(root, pmgr_recv_int(i));
+                    size = set_current(size, pmgr_recv_int(i));
+                    if (!buf) { buf = (void*) pmgr_malloc(size * N, "Gather buffer"); }
+                    pmgr_recv(buf + size*i, size, i);
+                    break;
+                case PMGR_SCATTER: /* root, size of message, then message data */
+                    if (i==0) { pmgr_debug(1, "Receiving data for PMGR_SCATTER"); }
+                    root = set_current(root, pmgr_recv_int(i));
+                    size = set_current(size, pmgr_recv_int(i));
+                    if (!buf) { buf = (void*) pmgr_malloc(size * N, "Scatter buffer"); }
+                    if (i == root) { pmgr_recv(buf, size * N, i); }
+                    break;
+                case PMGR_ALLGATHER: /* size of message, then message data */
+                    if (i==0) { pmgr_debug(1, "Receiving data for PMGR_ALLGATHER"); }
+                    size = set_current(size, pmgr_recv_int(i));
+                    if (!buf) { buf = (void*) pmgr_malloc(size * N, "Allgather buffer"); }
+                    pmgr_recv(buf + size*i, size, i);
+                    break;
+                case PMGR_ALLTOALL: /* size of message, then message data */
+                    if (i==0) { pmgr_debug(1, "Receiving data for PMGR_ALLTOALL"); }
+                    size = set_current(size, pmgr_recv_int(i));
+                    if (!buf) { buf = (void*) pmgr_malloc(size * N * N, "Alltoall buffer"); }
+                    pmgr_recv(buf + (size*N)*i, size * N, i);
+                    break;
+                default:
+                    pmgr_error("unrecognized PMGR_COLLECTIVE opcode: %d @ file %s:%d", opcode, __FILE__, __LINE__);
+            }
+        } /* end for each process, read in one packet (opcode and its associated data) */
 
-	/* Complete operation */
-	switch(opcode) {
-		case PMGR_OPEN:
-			pmgr_debug(1, "Sending data for PMGR_OPEN");
-			pmgr_debug(1, "Completed PMGR_OPEN");
-			break;
-		case PMGR_CLOSE:
-			pmgr_debug(1, "Sending data for PMGR_CLOSE");
-			pmgr_debug(1, "Completed PMGR_CLOSE");
-			exit = 1;
-			break;
-		case PMGR_ABORT:
-			pmgr_debug(1, "Sending data for PMGR_ABORT");
-			pmgr_debug(1, "Completed PMGR_ABORT");
-			exit = 1;
-			break;
-		case PMGR_BARRIER: /* (just echo the opcode back) */
-			pmgr_debug(1, "Sending data for PMGR_BARRIER");
-			pmgr_allgatherbcast(&opcode, sizeof(opcode));
-			pmgr_debug(1, "Completed PMGR_BARRIER");
-			break;
-		case PMGR_BCAST:
-			pmgr_debug(1, "Sending data for PMGR_BCAST");
-			pmgr_allgatherbcast(buf, size);
-			pmgr_debug(1, "Completed PMGR_BCAST");
-			break;
-		case PMGR_GATHER:
-			pmgr_debug(1, "Sending data for PMGR_GATHER");
-			pmgr_send(buf, size * N, root);
-			pmgr_debug(1, "Completed PMGR_GATHER");
-			break;
-		case PMGR_SCATTER:
-			pmgr_debug(1, "Sending data for PMGR_SCATTER");
-			pmgr_scatterbcast(buf, size);
-			pmgr_debug(1, "Completed PMGR_SCATTER");
-			break;
-		case PMGR_ALLGATHER:
-			pmgr_debug(1, "Sending data for PMGR_ALLGATHER");
-			pmgr_allgatherbcast(buf, size * N);
-			pmgr_debug(1, "Completed PMGR_ALLGATHER");
-			break;
-		case PMGR_ALLTOALL:
-			pmgr_debug(1, "Sending data for PMGR_ALLTOALL");
-			pmgr_alltoallbcast(buf, size);
-			pmgr_debug(1, "Completed PMGR_ALLTOALL");
-			break;
-		default:
-			pmgr_error("unrecognized PMGR_COLLECTIVE opcode: %d @ file %s:%d", opcode, __FILE__, __LINE__);
-	} /* end switch(opcode) for Completing operations */
+        /* Complete operation */
+        switch(opcode) {
+            case PMGR_OPEN:
+                pmgr_debug(1, "Sending data for PMGR_OPEN");
+                pmgr_debug(1, "Completed PMGR_OPEN");
+                break;
+            case PMGR_CLOSE:
+                pmgr_debug(1, "Sending data for PMGR_CLOSE");
+                pmgr_debug(1, "Completed PMGR_CLOSE");
+                exit = 1;
+                break;
+            case PMGR_ABORT:
+                pmgr_debug(1, "Sending data for PMGR_ABORT");
+                pmgr_debug(1, "Completed PMGR_ABORT");
+                exit = 1;
+                break;
+            case PMGR_BARRIER: /* (just echo the opcode back) */
+                pmgr_debug(1, "Sending data for PMGR_BARRIER");
+                pmgr_allgatherbcast(&opcode, sizeof(opcode));
+                pmgr_debug(1, "Completed PMGR_BARRIER");
+                break;
+            case PMGR_BCAST:
+                pmgr_debug(1, "Sending data for PMGR_BCAST");
+                pmgr_allgatherbcast(buf, size);
+                pmgr_debug(1, "Completed PMGR_BCAST");
+                break;
+            case PMGR_GATHER:
+                pmgr_debug(1, "Sending data for PMGR_GATHER");
+                pmgr_send(buf, size * N, root);
+                pmgr_debug(1, "Completed PMGR_GATHER");
+                break;
+            case PMGR_SCATTER:
+                pmgr_debug(1, "Sending data for PMGR_SCATTER");
+                pmgr_scatterbcast(buf, size);
+                pmgr_debug(1, "Completed PMGR_SCATTER");
+                break;
+            case PMGR_ALLGATHER:
+                pmgr_debug(1, "Sending data for PMGR_ALLGATHER");
+                pmgr_allgatherbcast(buf, size * N);
+                pmgr_debug(1, "Completed PMGR_ALLGATHER");
+                break;
+            case PMGR_ALLTOALL:
+                pmgr_debug(1, "Sending data for PMGR_ALLTOALL");
+                pmgr_alltoallbcast(buf, size);
+                pmgr_debug(1, "Completed PMGR_ALLTOALL");
+                break;
+            default:
+                pmgr_error("unrecognized PMGR_COLLECTIVE opcode: %d @ file %s:%d", opcode, __FILE__, __LINE__);
+        } /* end switch(opcode) for Completing operations */
 
-	pmgr_free(buf);
+        pmgr_free(buf);
         pmgr_gettimeofday(&time_endop);
         pmgr_debug(1, "Operation took %f seconds for %d procs", pmgr_getsecs(&time_endop, &time_startop), nprocs);
-  } /* while(!exit) must be more opcodes to process */
+    } /* while(!exit) must be more opcodes to process */
 
-  pmgr_gettimeofday(&time_end);
-  pmgr_debug(1, "Completed processing PMGR opcodes; took %f seconds for %d procs", pmgr_getsecs(&time_end, &time_start), nprocs);
+    pmgr_gettimeofday(&time_end);
+    pmgr_debug(1, "Completed processing PMGR opcodes; took %f seconds for %d procs", pmgr_getsecs(&time_end, &time_start), nprocs);
 
-  return PMGR_SUCCESS;
+    return PMGR_SUCCESS;
 }
