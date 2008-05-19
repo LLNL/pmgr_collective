@@ -42,7 +42,7 @@
  *          Michael Welcome  <mlwelcome@lbl.gov>
  */
 
-/* Copyright (c) 2002-2007, The Ohio State University. All rights
+/* Copyright (c) 2002-2008, The Ohio State University. All rights
  * reserved.
  *
  * This file is part of the MVAPICH software package developed by the
@@ -119,6 +119,8 @@ int  pmgr_num_child_incl; /* total number of children this node is responsible f
 
 /* startup time, time between starting pmgr_open and finishing pmgr_close */
 struct timeval time_open, time_close;
+
+unsigned pmgr_backoff_rand_seed;
 
 /*
  * =============================
@@ -379,7 +381,7 @@ int pmgr_connect(struct in_addr ip, int port)
                 return -1;
             } else {
                 close(sockfd);
-                usleep(((rand() % (mpirun_connect_backoff * 1000)) + 1) * 1000);
+                usleep(((rand_r(&pmgr_backoff_rand_seed) % (mpirun_connect_backoff * 1000)) + 1) * 1000);
             }
         } else {
             break;
@@ -856,17 +858,15 @@ int pmgr_open()
     pmgr_gettimeofday(&start);
     pmgr_debug(3, "Starting pmgr_open()");
 
+    /* seed used for random backoff in pmgr_connect later */
+    pmgr_backoff_rand_seed = time_open.tv_usec + pmgr_me;
+
     struct hostent* mpirun_hostent = gethostbyname(mpirun_hostname);
     if (!mpirun_hostent) {
         pmgr_error("(gethostbyname(%s) %s h_errno=%d) @ file %s:%d",
             mpirun_hostname, hstrerror(h_errno), h_errno, __FILE__, __LINE__);
         exit(1);
     }
-
-    /* seed srand used for random backoff in pmgr_connect later */
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    srand(tv.tv_usec + pmgr_me);
 
     mpirun_socket = pmgr_connect(*(struct in_addr *) (*mpirun_hostent->h_addr_list),
                                  htons(mpirun_port));
