@@ -67,6 +67,7 @@
 #include <poll.h>
 #include <fcntl.h>
 #include <sys/time.h>
+#include <arpa/inet.h>
 #include "pmgr_collective_client.h"
 
 /* set env variable to select which trees to use, if any -- all enabled by default */
@@ -496,8 +497,8 @@ int pmgr_open_tree()
         short child_port = * (short*) ((char*)recvbuf + sendcount*c + sizeof(ip));
         pmgr_child_s[i] = pmgr_connect(child_ip, child_port);
         if (pmgr_child_s[i] == -1) {
-            pmgr_error("Connecting to child failed (rank %d) @ file %s:%d",
-                c, __FILE__, __LINE__);
+            pmgr_error("Connecting to child (rank %d) at %s:%d failed @ file %s:%d",
+                c, inet_ntoa(child_ip), htons(child_port), __FILE__, __LINE__);
             exit(1);
         }
         pmgr_write_fd(pmgr_child_s[i], recvbuf, sendcount * pmgr_nprocs);
@@ -870,8 +871,9 @@ int pmgr_open()
     mpirun_socket = pmgr_connect(*(struct in_addr *) (*mpirun_hostent->h_addr_list),
                                  htons(mpirun_port));
     if (mpirun_socket == -1) {
-        pmgr_error("Connecting mpirun socket failed @ file %s:%d",
-            __FILE__, __LINE__);
+        pmgr_error("Connecting mpirun socket to %s at %s:%d failed @ file %s:%d",
+            mpirun_hostent->h_name, inet_ntoa(*(struct in_addr *) (*mpirun_hostent->h_addr_list)),
+            htons(mpirun_port), __FILE__, __LINE__);
         exit(1);
     }
 

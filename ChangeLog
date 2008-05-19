@@ -1,3 +1,12 @@
+2008-05-18 Adam Moody <moody20@llnl.gov>
+
+	* src/pmgr_collective_client.c : Added IP:port info to error message
+	  on failed connect to track down bad hardware faster.
+
+2008-01-28 Adam Moody <moody20@llnl.gov>
+
+	* test/client.c : Added data correctness test for each collective.
+
 2008-01-23 Adam Moody <moody20@llnl.gov>
 
 	* src/pmgr_collective_mpirun.c : Replaced tab indents with spaces (code cleanup).
