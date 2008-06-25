@@ -32,11 +32,11 @@
 #include <sys/time.h>
 #include "pmgr_collective_mpirun.h"
 
-int* fd_by_rank;
-int  N;
+static int* fd_by_rank;
+static int  N;
 
 /* Write size bytes from buf into socket for rank */
-void pmgr_send(void* buf, int size, int rank)
+static void pmgr_send(void* buf, int size, int rank)
 {
     int fd = fd_by_rank[rank];
     if (pmgr_write_fd(fd, buf, size) < 0) {
@@ -46,7 +46,7 @@ void pmgr_send(void* buf, int size, int rank)
 }
 
 /* Read size bytes from socket for rank into buf */
-void pmgr_recv(void* buf, int size, int rank)
+static void pmgr_recv(void* buf, int size, int rank)
 {
     int fd = fd_by_rank[rank];
     if (pmgr_read_fd(fd, buf, size) <= 0) {
@@ -56,7 +56,7 @@ void pmgr_recv(void* buf, int size, int rank)
 }
 
 /* Read an integer from socket for rank */
-int pmgr_recv_int(int rank)
+static int pmgr_recv_int(int rank)
 {
    int buf;
    pmgr_recv(&buf, sizeof(buf), rank);
@@ -64,7 +64,7 @@ int pmgr_recv_int(int rank)
 }
 
 /* Scatter data in buf to ranks using chunks of size bytes */
-void pmgr_scatterbcast(void* buf, int size)
+static void pmgr_scatterbcast(void* buf, int size)
 {
     int i;
     for (i = 0; i < N; i++) {
@@ -73,7 +73,7 @@ void pmgr_scatterbcast(void* buf, int size)
 }
 
 /* Broadcast buf, which is size bytes big, to each rank */
-void pmgr_allgatherbcast(void* buf, int size)
+static void pmgr_allgatherbcast(void* buf, int size)
 {
     int i;
     for (i = 0; i < N; i++) {
@@ -82,7 +82,7 @@ void pmgr_allgatherbcast(void* buf, int size)
 }
 
 /* Perform alltoall using data in buf with elements of size bytes */
-void pmgr_alltoallbcast(void* buf, int size)
+static void pmgr_alltoallbcast(void* buf, int size)
 {
     int pbufsize = size * N;
     void* pbuf = (void*) pmgr_malloc(pbufsize, "Temporary buffer for alltoall");
@@ -101,7 +101,7 @@ void pmgr_alltoallbcast(void* buf, int size)
 }
 
 /* Check that new == curr value if curr has been initialized (-1 == uninitialized) */
-int set_current(int curr, int new)
+static int set_current(int curr, int new)
 {
     if (curr == -1) {
         curr = new;

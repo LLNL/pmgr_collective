@@ -101,40 +101,40 @@
 #endif
 
 /* set envvar MPIRUN_USE_TREES={0,1} to disable/enable tree algorithms */
-int mpirun_use_trees       = MPIRUN_USE_TREES;
+static int mpirun_use_trees       = MPIRUN_USE_TREES;
 /* set envvar MPIRUN_USE_GATHER_TREE={0,1} to disable/enable gather tree */
-int mpirun_use_gather_tree  = MPIRUN_USE_GATHER_TREE;
+static int mpirun_use_gather_tree  = MPIRUN_USE_GATHER_TREE;
 /* set envvar MPIRUN_USE_SCATTER_TREE={0,1} to disable/enable scatter tree */
-int mpirun_use_scatter_tree = MPIRUN_USE_SCATTER_TREE;
+static int mpirun_use_scatter_tree = MPIRUN_USE_SCATTER_TREE;
 /* set envvar MPIRUN_USE_BCAST_TREE={0,1} to disable/enable bcast tree */
-int mpirun_use_bcast_tree  = MPIRUN_USE_BCAST_TREE;
+static int mpirun_use_bcast_tree  = MPIRUN_USE_BCAST_TREE;
 
-int mpirun_connect_tries    = MPIRUN_CONNECT_TRIES;
-int mpirun_connect_timeout  = MPIRUN_CONNECT_TIMEOUT; /* seconds */
-int mpirun_connect_backoff  = MPIRUN_CONNECT_BACKOFF; /* seconds */
-int mpirun_connect_random   = MPIRUN_CONNECT_RANDOM;
+static int mpirun_connect_tries    = MPIRUN_CONNECT_TRIES;
+static int mpirun_connect_timeout  = MPIRUN_CONNECT_TIMEOUT; /* seconds */
+static int mpirun_connect_backoff  = MPIRUN_CONNECT_BACKOFF; /* seconds */
+static int mpirun_connect_random   = MPIRUN_CONNECT_RANDOM;
 
-char* mpirun_hostname;
-int   mpirun_port;
-int   mpirun_socket;
-int   pmgr_nprocs = -1;
-int   pmgr_id     = -1;
+static char* mpirun_hostname;
+static int   mpirun_port;
+static int   mpirun_socket;
+static int   pmgr_nprocs = -1;
+static int   pmgr_id     = -1;
 
 /* tree data structures */
-int  pmgr_parent;         /* MPI rank of parent */
-int  pmgr_parent_s;       /* socket fd to parent */
-int* pmgr_child;          /* MPI ranks of children */
-int* pmgr_child_s;        /* socket fds to children */
-int  pmgr_num_child;      /* number of children */
-int* pmgr_child_incl;     /* number of children each child is responsible for (includes itself) */
-int  pmgr_num_child_incl; /* total number of children this node is responsible for */
-struct in_addr* pmgr_child_ip;   /* IP addresses of children */
-short*          pmgr_child_port; /* port number of children */
+static int  pmgr_parent;         /* MPI rank of parent */
+static int  pmgr_parent_s;       /* socket fd to parent */
+static int* pmgr_child;          /* MPI ranks of children */
+static int* pmgr_child_s;        /* socket fds to children */
+static int  pmgr_num_child;      /* number of children */
+static int* pmgr_child_incl;     /* number of children each child is responsible for (includes itself) */
+static int  pmgr_num_child_incl; /* total number of children this node is responsible for */
+static struct in_addr* pmgr_child_ip;   /* IP addresses of children */
+static short*          pmgr_child_port; /* port number of children */
 
 /* startup time, time between starting pmgr_open and finishing pmgr_close */
-struct timeval time_open, time_close;
+static struct timeval time_open, time_close;
 
-unsigned pmgr_backoff_rand_seed;
+static unsigned pmgr_backoff_rand_seed;
 
 /*
  * =============================
@@ -143,7 +143,7 @@ unsigned pmgr_backoff_rand_seed;
  */
 
 /* read size bytes into buf from mpirun_socket */
-int pmgr_read(void* buf, int size)
+static int pmgr_read(void* buf, int size)
 {
     int rc = 0;
     if ((rc = pmgr_read_fd(mpirun_socket, buf, size)) < 0) {
@@ -154,7 +154,7 @@ int pmgr_read(void* buf, int size)
 }
 
 /* write size bytes into mpirun_socket from buf */
-int pmgr_write(void* buf, int size)
+static int pmgr_write(void* buf, int size)
 {
     int rc = 0;
     if ((rc = pmgr_write_fd(mpirun_socket, buf, size)) < 0) {
@@ -165,7 +165,7 @@ int pmgr_write(void* buf, int size)
 }
 
 /* write integer into mpirun_socket */
-int pmgr_write_int(int value)
+static int pmgr_write_int(int value)
 {
     return pmgr_write(&value, sizeof(value));
 }
@@ -182,7 +182,7 @@ int pmgr_write_int(int value)
 /*
  * Perform barrier, each task writes an int then waits for an int
  */
-int mpirun_barrier()
+static int mpirun_barrier()
 {
     /* send BARRIER op code, then wait on integer reply */
     int buf;
@@ -197,7 +197,7 @@ int mpirun_barrier()
  * Perform MPI-like Broadcast, root writes sendcount bytes from buf,
  * into mpirun_socket, all receive sendcount bytes into buf
  */
-int mpirun_bcast(void* buf, int sendcount, int root)
+static int mpirun_bcast(void* buf, int sendcount, int root)
 {
     /* send BCAST op code, then root, then size of data */
     pmgr_write_int(PMGR_BCAST);
@@ -219,7 +219,7 @@ int mpirun_bcast(void* buf, int sendcount, int root)
  * Perform MPI-like Gather, each task writes sendcount bytes from sendbuf
  * into mpirun_socket, then root receives N*sendcount bytes into recvbuf
  */
-int mpirun_gather(void* sendbuf, int sendcount, void* recvbuf, int root)
+static int mpirun_gather(void* sendbuf, int sendcount, void* recvbuf, int root)
 {
     /* send GATHER op code, then root, then size of data, then data itself */
     pmgr_write_int(PMGR_GATHER);
@@ -239,7 +239,7 @@ int mpirun_gather(void* sendbuf, int sendcount, void* recvbuf, int root)
  * Perform MPI-like Scatter, root writes N*sendcount bytes from sendbuf
  * into mpirun_socket, then each task receives sendcount bytes into recvbuf
  */
-int mpirun_scatter(void* sendbuf, int sendcount, void* recvbuf, int root)
+static int mpirun_scatter(void* sendbuf, int sendcount, void* recvbuf, int root)
 {
     /* send SCATTER op code, then root, then size of data, then data itself */
     pmgr_write_int(PMGR_SCATTER);
@@ -261,7 +261,7 @@ int mpirun_scatter(void* sendbuf, int sendcount, void* recvbuf, int root)
  * Perform MPI-like Allgather, each task writes sendcount bytes from sendbuf
  * into mpirun_socket, then receives N*sendcount bytes into recvbuf
  */
-int mpirun_allgather(void* sendbuf, int sendcount, void* recvbuf)
+static int mpirun_allgather(void* sendbuf, int sendcount, void* recvbuf)
 {
     /* send ALLGATHER op code, then size of data, then data itself */
     pmgr_write_int(PMGR_ALLGATHER);
@@ -276,7 +276,7 @@ int mpirun_allgather(void* sendbuf, int sendcount, void* recvbuf)
  * Perform MPI-like Alltoall, each task writes N*sendcount bytes from sendbuf
  * into mpirun_socket, then recieves N*sendcount bytes into recvbuf
  */
-int mpirun_alltoall(void* sendbuf, int sendcount, void* recvbuf)
+static int mpirun_alltoall(void* sendbuf, int sendcount, void* recvbuf)
 {
     /* send ALLTOALL op code, then size of data, then data itself */
     pmgr_write_int(PMGR_ALLTOALL);
@@ -374,7 +374,7 @@ done:
  * shall return the connected socket file descriptor.  Otherwise, -1 shall be
  * returned.
  */
-int pmgr_connect(struct in_addr ip, int port)
+static int pmgr_connect(struct in_addr ip, int port)
 {
     struct sockaddr_in sockaddr;
     int sockfd;
@@ -421,7 +421,7 @@ int pmgr_connect(struct in_addr ip, int port)
 }
 
 /* open socket tree across MPI tasks */
-int pmgr_open_tree()
+static int pmgr_open_tree()
 {
     /* currently implements a binomial tree */
 
@@ -557,7 +557,7 @@ int pmgr_open_tree()
  * close down socket connections for tree (parent and any children), free
  * related memory
  */
-int pmgr_close_tree()
+static int pmgr_close_tree()
 {
     /* if i'm not rank 0, close socket connection with parent */
     if (pmgr_me != 0) {
@@ -581,7 +581,7 @@ int pmgr_close_tree()
 }
 
 /* broadcast size bytes from buf on rank 0 using socket tree */
-int pmgr_bcast_tree(void* buf, int size)
+static int pmgr_bcast_tree(void* buf, int size)
 {
     int rc = PMGR_SUCCESS;
     int i;
@@ -608,7 +608,7 @@ int pmgr_bcast_tree(void* buf, int size)
 }
 
 /* gather sendcount bytes from sendbuf on each task into recvbuf on rank 0 */
-int pmgr_gather_tree(void* sendbuf, int sendcount, void* recvbuf)
+static int pmgr_gather_tree(void* sendbuf, int sendcount, void* recvbuf)
 {
     int rc = PMGR_SUCCESS;
     int bigcount = (pmgr_num_child_incl+1) * sendcount;
@@ -648,7 +648,7 @@ int pmgr_gather_tree(void* sendbuf, int sendcount, void* recvbuf)
 }
 
 /* scatter sendcount byte chunks from sendbuf on rank 0 to recvbuf on each task */
-int pmgr_scatter_tree(void* sendbuf, int sendcount, void* recvbuf)
+static int pmgr_scatter_tree(void* sendbuf, int sendcount, void* recvbuf)
 {
     int rc = PMGR_SUCCESS;
     int bigcount = (pmgr_num_child_incl+1) * sendcount;
@@ -1271,7 +1271,7 @@ int pmgr_finalize()
  * =============================
  */
 
-int vprint_msg(char *buf, size_t len, const char *fmt, va_list ap)
+static int vprint_msg(char *buf, size_t len, const char *fmt, va_list ap)
 {
     int n;
 

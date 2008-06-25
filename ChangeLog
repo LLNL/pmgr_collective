@@ -1,3 +1,10 @@
+2008-06-25 Adam Moody <moody20@llnl.gov>
+
+	* src/pmgr_collective_mpirun.c,
+	  src.pmgr_collective_client.c : Added static keyword to all variables and
+	  functions used within a file to prevent exposing these symbols as external
+	  in the library.
+
 2008-06-18 Adam Moody <moody20@llnl.gov>
 
 	* src/pmgr_collective_client.c : Added ability to run as a single-task job
