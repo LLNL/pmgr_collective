@@ -40,7 +40,7 @@ void pmgr_send(void* buf, int size, int rank)
 {
     int fd = fd_by_rank[rank];
     if (pmgr_write_fd(fd, buf, size) < 0) {
-        pmgr_error("writing to rank %d (write() %m errno=%d) @ file %s:%d",
+        pmgr_error("Writing to rank %d (write() %m errno=%d) @ file %s:%d",
             rank, errno, __FILE__, __LINE__);
     }
 }
@@ -50,7 +50,7 @@ void pmgr_recv(void* buf, int size, int rank)
 {
     int fd = fd_by_rank[rank];
     if (pmgr_read_fd(fd, buf, size) <= 0) {
-        pmgr_error("reading from rank %d (read() %m errno=%d) @ file %s:%d",
+        pmgr_error("Reading from rank %d (read() %m errno=%d) @ file %s:%d",
             rank, errno, __FILE__, __LINE__);
     }
 }
@@ -107,7 +107,7 @@ int set_current(int curr, int new)
         curr = new;
     }
     if (new != curr) {
-        pmgr_error("unexpected value: received %d, expecting %d @ file %s:%d",
+        pmgr_error("Unexpected value: received %d, expecting %d @ file %s:%d",
             new, curr, __FILE__, __LINE__);
     }
     return curr;
@@ -228,7 +228,7 @@ int pmgr_processops(int* fds, int nprocs)
                 case PMGR_ABORT: /* followed by exit code */
                     if (i==0) { pmgr_debug(1, "Receiving data for PMGR_ABORT"); }
                     code = pmgr_recv_int(i);
-                    pmgr_error("received abort code %d from rank %d @ file %s:%d", code, i, __FILE__, __LINE__);
+                    pmgr_error("Received abort code %d from rank %d @ file %s:%d", code, i, __FILE__, __LINE__);
                     break;
                 case PMGR_BARRIER: /* no data */
                     if (i==0) { pmgr_debug(1, "Receiving data for PMGR_BARRIER"); }
@@ -267,7 +267,7 @@ int pmgr_processops(int* fds, int nprocs)
                     pmgr_recv(buf + (size*N)*i, size * N, i);
                     break;
                 default:
-                    pmgr_error("unrecognized PMGR_COLLECTIVE opcode: %d @ file %s:%d", opcode, __FILE__, __LINE__);
+                    pmgr_error("Unrecognized PMGR_COLLECTIVE opcode: %d @ file %s:%d", opcode, __FILE__, __LINE__);
             }
         } /* end for each process, read in one packet (opcode and its associated data) */
 
@@ -318,7 +318,7 @@ int pmgr_processops(int* fds, int nprocs)
                 pmgr_debug(1, "Completed PMGR_ALLTOALL");
                 break;
             default:
-                pmgr_error("unrecognized PMGR_COLLECTIVE opcode: %d @ file %s:%d", opcode, __FILE__, __LINE__);
+                pmgr_error("Unrecognized PMGR_COLLECTIVE opcode: %d @ file %s:%d", opcode, __FILE__, __LINE__);
         } /* end switch(opcode) for Completing operations */
 
         pmgr_free(buf);

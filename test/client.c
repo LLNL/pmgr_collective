@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "pmgr_collective_client.h"
 
 int ranks, my_rank, my_id;
@@ -71,6 +72,7 @@ int main(int argc, char* argv[])
     printf("Failed to init\n");
     exit(1);
   }
+  printf("Ranks: %d, Rank: %d, ID: %d\n", ranks, my_rank, my_id);
 
   buffer_size = ranks * size;
   sbuffer = malloc(buffer_size);

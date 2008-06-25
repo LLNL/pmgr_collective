@@ -129,8 +129,12 @@ int pmgr_write_fd(int fd, void* buf, int size)
 
 	if (rc < 0) {
 	    if(errno == EINTR || errno == EAGAIN) { continue; }
+            pmgr_error("writing to file descriptor (write(fd=%d,offset=%x,size=%d) %m errno=%d) @ file %s:%d",
+                fd, offset, size-n, errno, __FILE__, __LINE__);
 	    return rc;
 	} else if(rc == 0) {
+            pmgr_error("unexpected return code of 0 from write to file descriptor (write(fd=%d,offset=%x,size=%d)) @ file %s:%d",
+                fd, offset, size-n, __FILE__, __LINE__);
 	    return n;
 	}
 
@@ -153,8 +157,12 @@ int pmgr_read_fd(int fd, void* buf, int size)
 
 	if (rc < 0) {
 	    if(errno == EINTR || errno == EAGAIN) { continue; }
+            pmgr_error("reading from file descriptor (read(fd=%d,offset=%x,size=%d) %m errno=%d) @ file %s:%d",
+                fd, offset, size-n, errno, __FILE__, __LINE__);
 	    return rc;
 	} else if(rc == 0) {
+            pmgr_error("unexpected return code of 0 from read from file descriptor (read(fd=%d,offset=%x,size=%d)) @ file %s:%d",
+                fd, offset, size-n, __FILE__, __LINE__);
 	    return n;
 	}
 

@@ -1,3 +1,23 @@
+2008-06-18 Adam Moody <moody20@llnl.gov>
+
+	* src/pmgr_collective_client.c : Added ability to run as a single-task job
+	  if MPIRUN_* variables are not found in environment.  This gives a way
+	  to run job serially without needed mpirun or srun.
+	  Added scatter tree when scattering from rank 0.
+	  Rewrote debug levels so that rank 0 prints for 1-3, ranks 0 and N-1 print
+	  for 4-6, and all ranks print for 7-9.
+	  At debug level 3, environment variables values are printed to stdout.
+	  Added error messages for failed read/write from client to mpirun process.
+	  Added error messages for failed read/write to parent and children processes.
+	  Creates a sudo unique id by combining bits from the timestamp seconds and
+	  the pid for a 1 task job.
+
+	* src/pmgr_collective_mpirun.c : Adjusted error messages to make them more
+	  uniform.
+
+	* src/pmgr_collective_common.c : Added errors messages to pmgr_read_fd()
+	  and pmgr_write_fd().
+
 2008-05-19 Adam Moody <moody20@llnl.gov>
 
 	* src/pmgr_collective_client.c : Use rand_r() instead of srand() to avoid

@@ -76,6 +76,13 @@ the mpirun task:
                            retrying connect (default 5)
   MPIRUN_CONNECT_TRIES   - number of times to attempt connect before
                            aborting (default 7)
+  MPIRUN_CONNECT_RANDOM  - enable/disable randomized backoff option
+                           (default 1)
+                           enabled (1) - wait a random amout of time
+                             up to a max of the backoff time before
+                             re-attempting connect
+                           disabled (0) - always wait exactly the
+                             backoff time before re-attempting connect
 
 The above defaults may be changed by defining the appropriate macros
 at compile time, for example:
@@ -83,19 +90,26 @@ at compile time, for example:
   -DMPIRUN_CONNECT_TIMEOUT=5
   -DMPIRUN_CONNECT_BACKOFF=10
   -DMPIRUN_CONNECT_TRIES=20
+  -DMPIRUN_CONNECT_RANDOM=1
  
-Debug statements can be turned on for troubleshooting or timing.  For each
-level of debug verbosity, there are two sublevels.  In the first sublevel,
-just rank 0 and rank N-1 print information.  All ranks print debug statements
-in the second sublevel.
+Debug statements can be turned on for troubleshooting or timing.  There are
+three basic debug verbosity levels.  For each of these, there is a way to
+have just rank 0 print, rank 0 and rank N-1 print, or have all print.
 
   MPIRUN_CLIENT_DEBUG={0-6}
     0                     - disable debug statements
-
-    ranks[0,N]  all ranks
-    1           2         - includes pmgr_open to pmgr_close timing
-    3           4         - includes timing for each pmgr_* function
-    5           6         - denotes start and exit for each pmgr_* function
+  Rank 0 only:
+    1 - includes pmgr_open to pmgr_close timing
+    2 - includes timing for each pmgr_* function
+    3 - denotes start and exit for each pmgr_* function, and prints env var
+  Rank 0 and rank N-1 only:
+    4 - includes pmgr_open to pmgr_close timing
+    5 - includes timing for each pmgr_* function
+    6 - denotes start and exit for each pmgr_* function, and prints env var
+  All ranks:
+    7 - includes pmgr_open to pmgr_close timing
+    8 - includes timing for each pmgr_* function
+    9 - denotes start and exit for each pmgr_* function, and prints env var
 
 ====================================================
 Current Implementation
@@ -108,21 +122,23 @@ everyone's address) and forwards the table to each.  Each child receives the soc
 opens a connection with any children it has, and forwards the table.  The process continues
 down the tree until a leaf child is reached which just accepts the incoming parent connection.
 
-This same binomial tree, which was used to distribute the socket table, is also used to gather
-and broadcast data during collective operations.  Namely, this tree is used to provide log(N)
-scalable algorithms for:
+This same binomial tree, which was used to distribute the socket table, is also used to gather,
+scatter, and broadcast data during collective operations.  Namely, this tree is used to provide
+log(N) scalable algorithms for:
 
   pmgr_barrier
   pmgr_allgather
-  pmgr_bcast  (when rank 0 is the root)
-  pmgr_gather (when rank 0 is the root)
+  pmgr_allgatherstr
+  pmgr_bcast   (when rank 0 is the root)
+  pmgr_gather  (when rank 0 is the root)
+  pmgr_scatter (when rank 0 is the root)
 
 The remaining collectives are implemented via mpirun support, which typically amounts to a
 flat tree with mpirun as the root.  These collectives thus scale linearly:
 
-  pmgr_bcast  (when rank 0 is not the root)
-  pmgr_gather (when rank 0 is not the root)
-  pmgr_scatter
+  pmgr_bcast   (when rank 0 is not the root)
+  pmgr_gather  (when rank 0 is not the root)
+  pmgr_scatter (when rank 0 is not the root)
   pmgr_alltoall
 
 This implementation works best if the TCP socket each task opens corresponds to a port
@@ -130,9 +146,10 @@ on a switched network so that multiple nodes may send and receive data at the sa
 
 It's possible to disable / enable the binomial tree at runtime:
 
-  MPIRUN_USE_TREES={0,1}       - disable/enable all trees (disabling also avoids setup and teardown)
-  MPIRUN_USE_GATHER_TREE={0,1} - disable/enable gather tree
-  MPIRUN_USE_BCAST_TREE={0,1}  - disable/enable bcast tree
+  MPIRUN_USE_TREES={0,1}        - disable/enable binomial tree for all operations (also avoids setup and teardown)
+  MPIRUN_USE_GATHER_TREE={0,1}  - disable/enable binomial tree for gather operations
+  MPIRUN_USE_SCATTER_TREE={0,1} - disable/enable binomial tree for scatter operations
+  MPIRUN_USE_BCAST_TREE={0,1}   - disable/enable binomial tree for bcast operations
 
 If a tree is disabled, then the collective will fallback to the mpirun
 support, which is typically a flat tree with the mpirun process at the root.
@@ -144,6 +161,7 @@ all of the following in your compile flags:
 
   -DMPIRUN_USE_TREES=0
   -DMPIRUN_USE_GATHER_TREE=0
+  -DMPIRUN_USE_SCATTER_TREE=0
   -DMPIRUN_USE_BCAST_TREE=0
 
 ====================================================
