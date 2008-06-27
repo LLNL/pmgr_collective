@@ -1345,7 +1345,7 @@ int pmgr_abort(int code, const char *fmt, ...)
         va_start(ap, fmt);
         vprint_msg(buf, sizeof(buf), fmt, ap);
         va_end(ap);
-        pmgr_error("pmgr_abort(code=%d, msg=%s)", code, buf);
+        pmgr_error("Called pmgr_abort() Code: %d, Msg: %s", code, buf);
     }
 
     return PMGR_SUCCESS;

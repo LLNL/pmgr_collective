@@ -48,7 +48,7 @@ double pmgr_getsecs(struct timeval* tv2, struct timeval* tv1)
 void pmgr_gettimeofday(struct timeval* tv)
 {
         if (gettimeofday(tv, NULL) < 0) {
-                pmgr_error("getting time (gettimeofday() %m errno=%d)",
+                pmgr_error("Getting time (gettimeofday() %m errno=%d)",
                         errno);
         }
 }
@@ -69,7 +69,7 @@ void* pmgr_malloc(size_t n, char* msg)
 {
     void* p = malloc(n);
     if (!p) {
-        pmgr_error("malloc(%d) failed: %s (errno %d)", n, msg, errno);
+        pmgr_error("Call to malloc(%d) failed: %s (errno %d)", n, msg, errno);
         exit(1);
     }
     return p;
@@ -133,11 +133,11 @@ int pmgr_write_fd(int fd, void* buf, int size)
 
 	if (rc < 0) {
 	    if(errno == EINTR || errno == EAGAIN) { continue; }
-            pmgr_error("writing to file descriptor (write(fd=%d,offset=%x,size=%d) %m errno=%d) @ file %s:%d",
+            pmgr_error("Writing to file descriptor (write(fd=%d,offset=%x,size=%d) %m errno=%d) @ file %s:%d",
                 fd, offset, size-n, errno, __FILE__, __LINE__);
 	    return rc;
 	} else if(rc == 0) {
-            pmgr_error("unexpected return code of 0 from write to file descriptor (write(fd=%d,offset=%x,size=%d)) @ file %s:%d",
+            pmgr_error("Unexpected return code of 0 from write to file descriptor (write(fd=%d,offset=%x,size=%d)) @ file %s:%d",
                 fd, offset, size-n, __FILE__, __LINE__);
 	    return n;
 	}
@@ -161,11 +161,11 @@ int pmgr_read_fd(int fd, void* buf, int size)
 
 	if (rc < 0) {
 	    if(errno == EINTR || errno == EAGAIN) { continue; }
-            pmgr_error("reading from file descriptor (read(fd=%d,offset=%x,size=%d) %m errno=%d) @ file %s:%d",
+            pmgr_error("Reading from file descriptor (read(fd=%d,offset=%x,size=%d) %m errno=%d) @ file %s:%d",
                 fd, offset, size-n, errno, __FILE__, __LINE__);
 	    return rc;
 	} else if(rc == 0) {
-            pmgr_error("unexpected return code of 0 from read from file descriptor (read(fd=%d,offset=%x,size=%d)) @ file %s:%d",
+            pmgr_error("Unexpected return code of 0 from read from file descriptor (read(fd=%d,offset=%x,size=%d)) @ file %s:%d",
                 fd, offset, size-n, __FILE__, __LINE__);
 	    return n;
 	}
