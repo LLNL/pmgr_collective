@@ -79,15 +79,17 @@ void* pmgr_malloc(size_t n, char* msg)
 void pmgr_error(char *fmt, ...)
 {
     va_list argp;
+    char hostname[256];
+    gethostname(hostname, 256);
     fprintf(stderr, "PMGR_COLLECTIVE ERROR: ");
     if (pmgr_me >= 0) {
-        fprintf(stderr, "%d: ", pmgr_me);
+        fprintf(stderr, "rank %d on %s: ", pmgr_me, hostname);
     } else if (pmgr_me == -2) {
-        fprintf(stderr, "mpirun: ");
+        fprintf(stderr, "mpirun on %s: ", hostname);
     } else if (pmgr_me == -1) {
-        fprintf(stderr, "unitialized MPI task: ");
+        fprintf(stderr, "unitialized MPI task on %s: ", hostname);
     } else {
-        fprintf(stderr, "unitialized task (mpirun or MPI): ");
+        fprintf(stderr, "unitialized task (mpirun or MPI) on %s: ", hostname);
     }
     va_start(argp, fmt);
     vfprintf(stderr, fmt, argp);
@@ -99,16 +101,18 @@ void pmgr_error(char *fmt, ...)
 void pmgr_debug(int level, char *fmt, ...)
 {
     va_list argp;
+    char hostname[256];
+    gethostname(hostname, 256);
     if (pmgr_echo_debug > 0 && pmgr_echo_debug >= level) {
         fprintf(stderr, "PMGR_COLLECTIVE DEBUG: ");
         if (pmgr_me >= 0) {
-            fprintf(stderr, "%d: ", pmgr_me);
+            fprintf(stderr, "rank %d on %s: ", pmgr_me, hostname);
         } else if (pmgr_me == -2) {
-            fprintf(stderr, "mpirun: ");
+            fprintf(stderr, "mpirun on %s: ", hostname);
         } else if (pmgr_me == -1) {
-            fprintf(stderr, "unitialized MPI task: ");
+            fprintf(stderr, "unitialized MPI task on %s: ", hostname);
         } else {
-            fprintf(stderr, "unitialized task (mpirun or MPI): ");
+            fprintf(stderr, "unitialized task (mpirun or MPI) on %s: ", hostname);
         }
         va_start(argp, fmt);
         vfprintf(stderr, fmt, argp);
