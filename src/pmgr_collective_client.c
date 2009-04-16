@@ -1,4 +1,15 @@
 /*
+ * Copyright (c) 2009, Lawrence Livermore National Security, LLC.
+ * Produced at the Lawrence Livermore National Laboratory
+ * Written by Adam Moody <moody20@llnl.gov>
+ * LLNL-CODE-411039
+ * All rights reserved.
+ * This file is part of the PMGR_COLLECTIVE library.
+ * For details, see https://sourceforge.net/projects/pmgrcollective.
+ * Please also read this file: LICENSE.TXT.
+*/
+
+/*
  * PMGR_COLLECTIVE ============================================================
  * This protocol enables MPI to bootstrap itself through a series of collective
  * operations.  The collective operations are modeled after MPI collectives --
@@ -22,36 +33,7 @@
  * amount of data.  All message sizes are specified in bytes.
  *
  * All functions return PMGR_SUCCESS on successful completion.
- *
- * Copyright (C) 2007 The Regents of the University of California.
- * Produced at Lawrence Livermore National Laboratory.
- * Author: Adam Moody <moody20@llnl.gov>
- */
-
-/*
- * Copyright (C) 1999-2001 The Regents of the University of California
- * (through E.O. Lawrence Berkeley National Laboratory), subject to
- * approval by the U.S. Department of Energy.
- *
- * Use of this software is under license. The license agreement is included
- * in the file MVICH_LICENSE.TXT.
- *
- * Developed at Berkeley Lab as part of MVICH.
- *
- * Authors: Bill Saphir      <wcsaphir@lbl.gov>
- *          Michael Welcome  <mlwelcome@lbl.gov>
- */
-
-/* Copyright (c) 2002-2008, The Ohio State University. All rights
- * reserved.
- *
- * This file is part of the MVAPICH software package developed by the
- * team members of The Ohio State University's Network-Based Computing
- * Laboratory (NBCL), headed by Professor Dhabaleswar K. (DK) Panda.
- *
- * For detailed copyright and licensing information, please refer to the
- * copyright file COPYRIGHT_MVAPICH in the top level MPICH directory.
- */
+*/
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -315,6 +297,8 @@ static int pmgr_connect_w_timeout (int fd, struct sockaddr const * addr,
     err = 0;
     rc = connect(fd , addr , len);
     if (rc < 0 && errno != EINPROGRESS) {
+        pmgr_error("Nonblocking connect failed immediately (connect() %m errno=%d) @ file %s:%d",
+            errno, __FILE__, __LINE__);
         return -1;
     }
     if (rc == 0) {
@@ -330,8 +314,6 @@ again:	rc = poll(&ufds, 1, millisec);
         /* poll failed */
         if (errno == EINTR) {
             /* NOTE: connect() is non-interruptible in Linux */
-            pmgr_error("WARNING (will reattempt): EINTR while polling connection (poll() %m errno=%d) @ file %s:%d",
-                errno, __FILE__, __LINE__);
             goto again;
         } else {
             pmgr_error("Polling connection (poll() %m errno=%d) @ file %s:%d",
@@ -351,6 +333,8 @@ again:	rc = poll(&ufds, 1, millisec);
         if (getsockopt(fd, SOL_SOCKET, SO_ERROR,
                        &err, &err_len) < 0)
         {
+            pmgr_error("Failed to read event on socket (getsockopt() %m errno=%d) @ file %s:%d",
+                errno, __FILE__, __LINE__);
             return -1; /* solaris pending error */
         }
     }
@@ -359,11 +343,11 @@ done:
     fcntl(fd, F_SETFL, flags);
 
     /* NOTE: Connection refused is typically reported for
-     * non-responsived nodes plus attempts to communicate
+     * non-responsive nodes plus attempts to communicate
      * with terminated launcher. */
     if (err) {
-        pmgr_error("Error on socket in pmgr_connect_w_timeout() @ file %s:%d",
-            __FILE__, __LINE__);
+        pmgr_error("Error on socket in pmgr_connect_w_timeout() (getsockopt() set err=%d) @ file %s:%d",
+            err, __FILE__, __LINE__);
         return -1;
     }
  
@@ -1345,6 +1329,7 @@ int pmgr_abort(int code, const char *fmt, ...)
         va_start(ap, fmt);
         vprint_msg(buf, sizeof(buf), fmt, ap);
         va_end(ap);
+        /* TODO: want to echo this message here?  Want to do this for every user abort? */
         pmgr_error("Called pmgr_abort() Code: %d, Msg: %s", code, buf);
     }
 

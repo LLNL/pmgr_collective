@@ -1,3 +1,14 @@
+/*
+ * Copyright (c) 2009, Lawrence Livermore National Security, LLC.
+ * Produced at the Lawrence Livermore National Laboratory
+ * Written by Adam Moody <moody20@llnl.gov>
+ * LLNL-CODE-411039
+ * All rights reserved.
+ * This file is part of the PMGR_COLLECTIVE library.
+ * For details, see https://sourceforge.net/projects/pmgrcollective.
+ * Please also read this file: LICENSE.TXT.
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

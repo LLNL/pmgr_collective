@@ -1,4 +1,4 @@
-/*RAM
+/*
  * Copyright (C) 1999-2001 The Regents of the University of California
  * (through E.O. Lawrence Berkeley National Laboratory), subject to
  * approval by the U.S. Department of Energy.

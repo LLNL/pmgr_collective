@@ -1,4 +1,15 @@
 /*
+ * Copyright (c) 2009, Lawrence Livermore National Security, LLC.
+ * Produced at the Lawrence Livermore National Laboratory
+ * Written by Adam Moody <moody20@llnl.gov>
+ * LLNL-CODE-411039
+ * All rights reserved.
+ * This file is part of the PMGR_COLLECTIVE library.
+ * For details, see https://sourceforge.net/projects/pmgrcollective.
+ * Please also read this file: LICENSE.TXT.
+*/
+
+/*
  * PMGR_COLLECTIVE ============================================================
  * This protocol enables MPI to bootstrap itself through a series of collective
  * operations.  The collective operations are modeled after MPI collectives --
@@ -11,10 +22,6 @@
  * This file provides common definitions for
  *   pmgr_collective_mpirun - the interface used by mpirun
  *   pmgr_collective_client - the interface used by the MPI tasks
- *
- * Copyright (C) 2007 The Regents of the University of California.
- * Produced at Lawrence Livermore National Laboratory.
- * Author: Adam Moody <moody20@llnl.gov>
 */
 
 #ifndef _PMGR_COLLECTIVE_COMMON_H

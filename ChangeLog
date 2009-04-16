@@ -16,7 +16,7 @@
 	  At debug level 3, environment variables values are printed to stdout.
 	  Added error messages for failed read/write from client to mpirun process.
 	  Added error messages for failed read/write to parent and children processes.
-	  Creates a sudo unique id by combining bits from the timestamp seconds and
+	  Creates a psuedo unique id by combining bits from the timestamp seconds and
 	  the pid for a 1 task job.
 
 	* src/pmgr_collective_mpirun.c : Adjusted error messages to make them more
