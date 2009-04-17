@@ -5,10 +5,10 @@ dir="pmgr_collective-1.0"
 rm -rf $dir
 svn export . $dir
 pushd $dir
-  rm -rf make_tarball
+  rm -rf build_tarball
   rm -rf package.conf
-  rm -rf tempdir
   rm -rf patch_mvapich.sh
+  rm -rf tempdir
 popd
 
 tar -zcf $dir.tgz $dir
