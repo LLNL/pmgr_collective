@@ -1,3 +1,9 @@
+2009-04-16 Adam Moody <moody20@llnl.gov>
+
+	* LICENSE.TXT,
+	  src/*,
+	  test/client.c : Added BSD license info for open source release.
+
 2008-06-25 Adam Moody <moody20@llnl.gov>
 
 	* src/pmgr_collective_mpirun.c,

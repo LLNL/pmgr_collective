@@ -1,0 +1,15 @@
+#!/bin/bash
+
+dir="pmgr_collective-1.0"
+
+rm -rf $dir
+svn export . $dir
+pushd $dir
+  rm -rf make_tarball
+  rm -rf package.conf
+  rm -rf tempdir
+  rm -rf patch_mvapich.sh
+popd
+
+tar -zcf $dir.tgz $dir
+rm -rf $dir
