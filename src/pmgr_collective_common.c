@@ -76,7 +76,7 @@ void* pmgr_malloc(size_t n, char* msg)
 {
     void* p = malloc(n);
     if (!p) {
-        pmgr_error("Call to malloc(%d) failed: %s (errno %d)", n, msg, errno);
+        pmgr_error("Call to malloc(%lu) failed: %s (%m errno %d)", n, msg, errno);
         exit(1);
     }
     return p;

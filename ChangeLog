@@ -1,3 +1,8 @@
+2009-06-15 Adam Moody <moody20@llnl.gov>
+
+	* src/pmgr_collective_common.c : Changed pmgr_malloc error printf from
+	  %d to %lu for byte count (bug) and added %m to get reason for failure.
+
 2009-04-16 Adam Moody <moody20@llnl.gov>
 
 	* LICENSE.TXT,
