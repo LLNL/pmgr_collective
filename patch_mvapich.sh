@@ -9,8 +9,11 @@
 #mpidir=/usr/global/tools/mpi/checkouts/llnl/1.0-r2481-llnl
 #channels="ch_gen2 ch_gen2_ud ch_smp"
 
-mpidir=/usr/global/tools/mpi/checkouts/llnl/1.1-r3286-llnl
-channels="ch_gen2 ch_smp ch_hybrid"
+#mpidir=/usr/global/tools/mpi/checkouts/llnl/1.1-r3286-llnl
+#channels="ch_gen2 ch_smp ch_hybrid"
+
+mpidir=/usr/global/tools/mpi/checkouts/llnl/1.2-RC1-llnl
+channels="ch_gen2 ch_smp ch_hybrid ch_psm"
 
 # pushd $mpidir; make distclean; make quilt; popd
 

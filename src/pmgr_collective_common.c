@@ -29,6 +29,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/time.h>
 #include "pmgr_collective_common.h"
 
@@ -87,7 +88,9 @@ void pmgr_error(char *fmt, ...)
 {
     va_list argp;
     char hostname[256];
-    gethostname(hostname, 256);
+    if (gethostname(hostname, 256) < 0) {
+        strcpy(hostname, "NULLHOST");
+    }
     fprintf(stderr, "PMGR_COLLECTIVE ERROR: ");
     if (pmgr_me >= 0) {
         fprintf(stderr, "rank %d on %s: ", pmgr_me, hostname);
@@ -109,7 +112,9 @@ void pmgr_debug(int level, char *fmt, ...)
 {
     va_list argp;
     char hostname[256];
-    gethostname(hostname, 256);
+    if (gethostname(hostname, 256) < 0) {
+        strcpy(hostname, "NULLHOST");
+    }
     if (pmgr_echo_debug > 0 && pmgr_echo_debug >= level) {
         fprintf(stderr, "PMGR_COLLECTIVE DEBUG: ");
         if (pmgr_me >= 0) {

@@ -1,3 +1,10 @@
+2010-08-06 Adam Moody <moody20@llnl.gov>
+
+	* src/pmgr_collective_client.c : Added pmgr_check_tree call to check state
+	  of tree.  Implements an allreduce using the tree and exits if any process
+	  detects a failure.  Created packet protocol for tree, supporting either
+	  collective packets or abort packets.
+
 2009-06-15 Adam Moody <moody20@llnl.gov>
 
 	* src/pmgr_collective_common.c : Changed pmgr_malloc error printf from

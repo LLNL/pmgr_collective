@@ -1,6 +1,6 @@
 #!/bin/bash
 
-dir="pmgr_collective-1.0"
+dir="pmgr_collective-1.1"
 
 rm -rf $dir
 svn export . $dir

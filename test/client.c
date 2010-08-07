@@ -83,7 +83,7 @@ int main(int argc, char* argv[])
     printf("Failed to init\n");
     exit(1);
   }
-  printf("Ranks: %d, Rank: %d, ID: %d\n", ranks, my_rank, my_id);
+//  printf("Ranks: %d, Rank: %d, ID: %d\n", ranks, my_rank, my_id);
 
   buffer_size = ranks * size;
   sbuffer = malloc(buffer_size);
@@ -150,6 +150,7 @@ int main(int argc, char* argv[])
   }
 
   /* test pmgr_alltoall */
+/*
   init_sbuffer(my_rank);
   init_rbuffer(my_rank);
   if (pmgr_alltoall(sbuffer, (int) size, rbuffer) != PMGR_SUCCESS) {
@@ -160,15 +161,16 @@ int main(int argc, char* argv[])
   for (i = 0; i < ranks; i++) {
     check_rbuffer(rbuffer, i*size, i, my_rank*size, size, "pmgr_alltoall");
   }
+*/
 
-/*
   int max;
   if (pmgr_allreducemaxint(&my_rank, &max) != PMGR_SUCCESS) {
     printf("Allreducemaxint failed\n");
     exit(1);
   }
-  printf("%d: Max int %d\n", my_rank, max);
+//  printf("%d: Max int %d\n", my_rank, max);
 
+/*
   char** hosts;
   char*  hostsbuf;
   char   host[255];
