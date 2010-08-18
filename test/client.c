@@ -29,6 +29,7 @@ void init_sbuffer(int rank)
   char value;
   for(i = 0; i < buffer_size; i++)
   {
+    /*value = ((char) ((i+1)*(rank+1) + i) % 26) + 'a';*/
     value = (char) ((i+1)*(rank+1) + i);
     sbuffer[i] = value;
   }
@@ -47,11 +48,14 @@ void check_sbuffer(char* op)
   char value;
   for(i = 0; i < buffer_size; i++)
   {
+    /*value = ((char) ((i+1)*(my_rank+1) + i) % 26) + 'a';*/
     value = (char) ((i+1)*(my_rank+1) + i);
     if (sbuffer[i] != value)
     {
       printf("%d: %s: Send buffer corruption detected at sbuffer[%d]\n",
-             my_rank, op, i);
+             my_rank, op, i
+      );
+      break;
     }
   }
 }
@@ -64,11 +68,14 @@ void check_rbuffer(char* buffer, size_t byte_offset, int rank, size_t src_byte_o
   buffer += byte_offset;
   for(i = 0, j = src_byte_offset; i < element_count; i++, j++)
   {
+    /*value = ((char) ((j+1)*(rank+1) + j) % 26) + 'a';*/
     value = (char) ((j+1)*(rank+1) + j);
     if (buffer[i] != value)
     {
       printf("%d: %s: Receive buffer corruption detected at rbuffer[%d] from rank %d\n",
-             my_rank, op, byte_offset+i, rank);
+             my_rank, op, byte_offset+i, rank
+      );
+      break;
     }
   }
 }
@@ -150,7 +157,6 @@ int main(int argc, char* argv[])
   }
 
   /* test pmgr_alltoall */
-/*
   init_sbuffer(my_rank);
   init_rbuffer(my_rank);
   if (pmgr_alltoall(sbuffer, (int) size, rbuffer) != PMGR_SUCCESS) {
@@ -161,7 +167,6 @@ int main(int argc, char* argv[])
   for (i = 0; i < ranks; i++) {
     check_rbuffer(rbuffer, i*size, i, my_rank*size, size, "pmgr_alltoall");
   }
-*/
 
   int max;
   if (pmgr_allreducemaxint(&my_rank, &max) != PMGR_SUCCESS) {

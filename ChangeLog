@@ -1,3 +1,8 @@
+2010-08-17 Adam Moody <moody20@llnl.gov>
+
+	* src/pmgr_collective_client.c : Fixed bug in pmgr_scatter_tree.  Changed
+	  pmgr_alltoall to use tree as best as it can.
+
 2010-08-06 Adam Moody <moody20@llnl.gov>
 
 	* src/pmgr_collective_client.c : Added pmgr_check_tree call to check state

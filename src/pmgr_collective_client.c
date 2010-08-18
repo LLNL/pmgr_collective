@@ -51,6 +51,7 @@
 #include <sys/time.h>
 #include <arpa/inet.h>
 #include "pmgr_collective_client.h"
+#include "pmi.h"
 
 #define PMGR_DEBUG_LEVELS (3)
 
@@ -99,6 +100,8 @@ static int mpirun_connect_timeout  = MPIRUN_CONNECT_TIMEOUT; /* seconds */
 static int mpirun_connect_backoff  = MPIRUN_CONNECT_BACKOFF; /* seconds */
 static int mpirun_connect_random   = MPIRUN_CONNECT_RANDOM;
 
+static int mpirun_use_pmi = 0;
+
 static char* mpirun_hostname;
 static int   mpirun_port;
 static int   mpirun_socket = -1;
@@ -133,7 +136,8 @@ static int pmgr_read(void* buf, int size)
     int rc = 0;
     if ((rc = pmgr_read_fd(mpirun_socket, buf, size)) < 0) {
         pmgr_error("Reading from mpirun at %s:%d (read(buf=%x,size=%d) %m errno=%d) @ file %s:%d",
-            mpirun_hostname, mpirun_port, buf, size, errno, __FILE__, __LINE__);
+            mpirun_hostname, mpirun_port, buf, size, errno, __FILE__, __LINE__
+        );
     }
     return rc;
 }
@@ -144,7 +148,8 @@ static int pmgr_write(void* buf, int size)
     int rc = 0;
     if ((rc = pmgr_write_fd(mpirun_socket, buf, size)) < 0) {
         pmgr_error("Writing to mpirun at %s:%d (write(buf=%x,size=%d) %m errno=%d) @ file %s:%d",
-            mpirun_hostname, mpirun_port, buf, size, errno, __FILE__, __LINE__);
+            mpirun_hostname, mpirun_port, buf, size, errno, __FILE__, __LINE__
+        );
     }
     return rc;
 }
@@ -172,8 +177,15 @@ static int mpirun_barrier()
     /* send BARRIER op code, then wait on integer reply */
     int buf;
 
-    pmgr_write_int(PMGR_BARRIER);
-    pmgr_read(&buf, sizeof(int));
+    if(mpirun_socket >= 0) {
+        pmgr_write_int(PMGR_BARRIER);
+        pmgr_read(&buf, sizeof(int));
+    } else {
+        pmgr_error("Barrier failed since socket to mpirun is not open @ %s:%d",
+            __FILE__,__LINE__
+        );
+        return !PMGR_SUCCESS;
+    }
 
     return PMGR_SUCCESS;
 }
@@ -184,18 +196,25 @@ static int mpirun_barrier()
  */
 static int mpirun_bcast(void* buf, int sendcount, int root)
 {
-    /* send BCAST op code, then root, then size of data */
-    pmgr_write_int(PMGR_BCAST);
-    pmgr_write_int(root);
-    pmgr_write_int(sendcount);
+    if(mpirun_socket >= 0) {
+        /* send BCAST op code, then root, then size of data */
+        pmgr_write_int(PMGR_BCAST);
+        pmgr_write_int(root);
+        pmgr_write_int(sendcount);
 
-    /* if i am root, send data */
-    if (pmgr_me == root) {
-      pmgr_write(buf, sendcount);
+        /* if i am root, send data */
+        if (pmgr_me == root) {
+            pmgr_write(buf, sendcount);
+        }
+
+        /* read in data */
+        pmgr_read(buf, sendcount);
+    } else {
+        pmgr_error("Bcast failed since socket to mpirun is not open @ %s:%d",
+            __FILE__,__LINE__
+        );
+        return !PMGR_SUCCESS;
     }
-
-    /* read in data */
-    pmgr_read(buf, sendcount);
 
     return PMGR_SUCCESS;
 }
@@ -206,15 +225,22 @@ static int mpirun_bcast(void* buf, int sendcount, int root)
  */
 static int mpirun_gather(void* sendbuf, int sendcount, void* recvbuf, int root)
 {
-    /* send GATHER op code, then root, then size of data, then data itself */
-    pmgr_write_int(PMGR_GATHER);
-    pmgr_write_int(root);
-    pmgr_write_int(sendcount);
-    pmgr_write(sendbuf, sendcount);
+    if(mpirun_socket >= 0) {
+        /* send GATHER op code, then root, then size of data, then data itself */
+        pmgr_write_int(PMGR_GATHER);
+        pmgr_write_int(root);
+        pmgr_write_int(sendcount);
+        pmgr_write(sendbuf, sendcount);
 
-    /* only the root receives data */
-    if (pmgr_me == root) {
-       pmgr_read(recvbuf, sendcount * pmgr_nprocs);
+        /* only the root receives data */
+        if (pmgr_me == root) {
+           pmgr_read(recvbuf, sendcount * pmgr_nprocs);
+        }
+    } else {
+        pmgr_error("Gather failed since socket to mpirun is not open @ %s:%d",
+            __FILE__,__LINE__
+        );
+        return !PMGR_SUCCESS;
     }
 
     return PMGR_SUCCESS;
@@ -226,18 +252,25 @@ static int mpirun_gather(void* sendbuf, int sendcount, void* recvbuf, int root)
  */
 static int mpirun_scatter(void* sendbuf, int sendcount, void* recvbuf, int root)
 {
-    /* send SCATTER op code, then root, then size of data, then data itself */
-    pmgr_write_int(PMGR_SCATTER);
-    pmgr_write_int(root);
-    pmgr_write_int(sendcount);
+    if(mpirun_socket >= 0) {
+        /* send SCATTER op code, then root, then size of data, then data itself */
+        pmgr_write_int(PMGR_SCATTER);
+        pmgr_write_int(root);
+        pmgr_write_int(sendcount);
 
-    /* if i am root, send all chunks to mpirun */
-    if (pmgr_me == root) {
-      pmgr_write(sendbuf, sendcount * pmgr_nprocs);
+        /* if i am root, send all chunks to mpirun */
+        if (pmgr_me == root) {
+            pmgr_write(sendbuf, sendcount * pmgr_nprocs);
+        }
+
+        /* receive my chunk */
+        pmgr_read(recvbuf, sendcount);
+    } else {
+        pmgr_error("Scatter failed since socket to mpirun is not open @ %s:%d",
+            __FILE__,__LINE__
+        );
+        return !PMGR_SUCCESS;
     }
-
-    /* receive my chunk */
-    pmgr_read(recvbuf, sendcount);
 
     return PMGR_SUCCESS;
 }
@@ -248,11 +281,18 @@ static int mpirun_scatter(void* sendbuf, int sendcount, void* recvbuf, int root)
  */
 static int mpirun_allgather(void* sendbuf, int sendcount, void* recvbuf)
 {
-    /* send ALLGATHER op code, then size of data, then data itself */
-    pmgr_write_int(PMGR_ALLGATHER);
-    pmgr_write_int(sendcount);
-    pmgr_write(sendbuf, sendcount);
-    pmgr_read (recvbuf, sendcount * pmgr_nprocs);
+    if(mpirun_socket >= 0) {
+        /* send ALLGATHER op code, then size of data, then data itself */
+        pmgr_write_int(PMGR_ALLGATHER);
+        pmgr_write_int(sendcount);
+        pmgr_write(sendbuf, sendcount);
+        pmgr_read (recvbuf, sendcount * pmgr_nprocs);
+    } else {
+        pmgr_error("Allgather failed since socket to mpirun is not open @ %s:%d",
+            __FILE__,__LINE__
+        );
+        return !PMGR_SUCCESS;
+    }
 
     return PMGR_SUCCESS;
 }
@@ -263,11 +303,18 @@ static int mpirun_allgather(void* sendbuf, int sendcount, void* recvbuf)
  */
 static int mpirun_alltoall(void* sendbuf, int sendcount, void* recvbuf)
 {
-    /* send ALLTOALL op code, then size of data, then data itself */
-    pmgr_write_int(PMGR_ALLTOALL);
-    pmgr_write_int(sendcount);
-    pmgr_write(sendbuf, sendcount * pmgr_nprocs);
-    pmgr_read (recvbuf, sendcount * pmgr_nprocs);
+    if(mpirun_socket >= 0) {
+        /* send ALLTOALL op code, then size of data, then data itself */
+        pmgr_write_int(PMGR_ALLTOALL);
+        pmgr_write_int(sendcount);
+        pmgr_write(sendbuf, sendcount * pmgr_nprocs);
+        pmgr_read (recvbuf, sendcount * pmgr_nprocs);
+    } else {
+        pmgr_error("Alltoall failed since socket to mpirun is not open @ %s:%d",
+            __FILE__,__LINE__
+        );
+        return !PMGR_SUCCESS;
+    }
 
     return PMGR_SUCCESS;
 }
@@ -287,27 +334,24 @@ static int mpirun_alltoall(void* sendbuf, int sendcount, void* recvbuf)
  *
  * Return 0 on success, -1 for errors.
  */
-static int pmgr_connect_w_timeout (int fd, struct sockaddr const * addr,
-                                   socklen_t len, int millisec)
+static int pmgr_connect_w_timeout(int fd, struct sockaddr_in* addr, int millisec)
 {
-    int rc, flags, err;
-    socklen_t err_len;
-    struct pollfd ufds;
-
-    flags = fcntl(fd, F_GETFL);
+    int flags = fcntl(fd, F_GETFL);
     fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 
-    err = 0;
-    rc = connect(fd , addr , len);
+    int err = 0;
+    int rc = connect(fd, (struct sockaddr *) addr, sizeof(struct sockaddr_in));
     if (rc < 0 && errno != EINPROGRESS) {
-        pmgr_error("Nonblocking connect failed immediately (connect() %m errno=%d) @ file %s:%d",
-            errno, __FILE__, __LINE__);
+        pmgr_error("Nonblocking connect failed immediately connecting to %s:%d (connect() %m errno=%d) @ file %s:%d",
+            inet_ntoa(addr->sin_addr), htons(addr->sin_port), errno, __FILE__, __LINE__
+        );
         return -1;
     }
     if (rc == 0) {
         goto done;  /* connect completed immediately */
     }
 
+    struct pollfd ufds;
     ufds.fd = fd;
     ufds.events = POLLIN | POLLOUT;
     ufds.revents = 0;
@@ -319,8 +363,9 @@ again:	rc = poll(&ufds, 1, millisec);
             /* NOTE: connect() is non-interruptible in Linux */
             goto again;
         } else {
-            pmgr_error("Polling connection (poll() %m errno=%d) @ file %s:%d",
-                errno, __FILE__, __LINE__);
+            pmgr_error("Failed to poll connection connecting to %s:%d (poll() %m errno=%d) @ file %s:%d",
+                inet_ntoa(addr->sin_addr), htons(addr->sin_port), errno, __FILE__, __LINE__
+            );
         }
         return -1;
     } else if (rc == 0) {
@@ -332,12 +377,11 @@ again:	rc = poll(&ufds, 1, millisec);
          * We need to check if the connection succeeded by
          * using getsockopt.  The revent is not necessarily
          * POLLERR when the connection fails! */
-        err_len = (socklen_t) sizeof(err);
-        if (getsockopt(fd, SOL_SOCKET, SO_ERROR,
-                       &err, &err_len) < 0)
-        {
-            pmgr_error("Failed to read event on socket (getsockopt() %m errno=%d) @ file %s:%d",
-                errno, __FILE__, __LINE__);
+        socklen_t err_len = (socklen_t) sizeof(err);
+        if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &err_len) < 0) {
+            pmgr_error("Failed to read event on socket connecting to %s:%d (getsockopt() %m errno=%d) @ file %s:%d",
+                inet_ntoa(addr->sin_addr), htons(addr->sin_port), errno, __FILE__, __LINE__
+            );
             return -1; /* solaris pending error */
         }
     }
@@ -349,8 +393,9 @@ done:
      * non-responsive nodes plus attempts to communicate
      * with terminated launcher. */
     if (err) {
-        pmgr_error("Error on socket in pmgr_connect_w_timeout() (getsockopt() set err=%d) @ file %s:%d",
-            err, __FILE__, __LINE__);
+        pmgr_error("Error on socket in pmgr_connect_w_timeout() connecting to %s:%d (getsockopt() set err=%d) @ file %s:%d",
+            inet_ntoa(addr->sin_addr), htons(addr->sin_port), err, __FILE__, __LINE__
+        );
         return -1;
     }
  
@@ -379,16 +424,17 @@ static int pmgr_connect(struct in_addr ip, int port)
         sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         if (sockfd < 0) {
             pmgr_error("Creating socket (socket() %m errno=%d) @ file %s:%d",
-                errno, __FILE__, __LINE__);
+                errno, __FILE__, __LINE__
+            );
             return -1;
         }
 
         /* connect socket to address */
-        if (pmgr_connect_w_timeout(sockfd, (struct sockaddr *) &sockaddr,
-                              sizeof(sockaddr), mpirun_connect_timeout * 1000) < 0) {
+        if (pmgr_connect_w_timeout(sockfd, &sockaddr, mpirun_connect_timeout * 1000) < 0) {
             if (i >= mpirun_connect_tries) {
-                pmgr_error("Connecting socket: pmgr_connect_w_timeout() failed @ file %s:%d",
-                    __FILE__, __LINE__);
+                pmgr_error("Failed to connect to %s:%d @ file %s:%d",
+                    inet_ntoa(ip), htons(port), __FILE__, __LINE__
+                );
                 close(sockfd);
                 return -1;
             } else {
@@ -476,9 +522,9 @@ static int pmgr_abort_tree()
      * but we do call pmgr_close_tree to shut down sockets for our tree */
     pmgr_close_tree();
 
-    /* send CLOSE op code to mpirun, then close socket */
-    pmgr_write_int(PMGR_CLOSE);
     if (mpirun_socket >= 0) {
+        /* send CLOSE op code to mpirun, then close socket */
+        pmgr_write_int(PMGR_CLOSE);
         close(mpirun_socket);
         mpirun_socket = -1;
     }
@@ -703,7 +749,8 @@ static int pmgr_open_tree()
     int sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (sockfd < 0) {
         pmgr_error("Creating parent socket (socket() %m errno=%d) @ file %s:%d",
-            errno, __FILE__, __LINE__);
+            errno, __FILE__, __LINE__
+        );
         exit(1);
     }
 
@@ -716,14 +763,16 @@ static int pmgr_open_tree()
     /* bind socket */
     if (bind(sockfd, (struct sockaddr *) &sin, sizeof(sin)) < 0) {
         pmgr_error("Binding parent socket (bind() %m errno=%d) @ file %s:%d",
-            errno, __FILE__, __LINE__);
+            errno, __FILE__, __LINE__
+        );
         exit(1);
     }
 
     /* set the socket to listen for connections */
     if (listen(sockfd, 1) < 0) {
         pmgr_error("Setting parent socket to listen (listen() %m errno=%d) @ file %s:%d",
-            errno, __FILE__, __LINE__);
+            errno, __FILE__, __LINE__
+        );
         exit(1);
     }
 
@@ -731,32 +780,154 @@ static int pmgr_open_tree()
     socklen_t len = sizeof(sin);
     if (getsockname(sockfd, (struct sockaddr *) &sin, &len) < 0) {
         pmgr_error("Reading parent socket port number (getsockname() %m errno=%d) @ file %s:%d",
-            errno, __FILE__, __LINE__);
+            errno, __FILE__, __LINE__
+        );
         exit(1);
     }
 
-    /* extract our ip and port number to send to mpirun */
+    /* extract our ip and port number */
     char hn[256];
     if (gethostname(hn, 256) < 0) {
         pmgr_error("Error calling gethostname() @ file %s:%d",
-            __FILE__, __LINE__);
+            __FILE__, __LINE__
+        );
         exit(1);
     }
     struct hostent* he = gethostbyname(hn);
     struct in_addr ip = * (struct in_addr *) *(he->h_addr_list);
     short port = sin.sin_port;
 
-    /* allocate buffers to receive ip:port table for all tasks */
+    /* allocate buffer to receive ip:port table for all tasks */
     int sendcount = sizeof(ip) + sizeof(port);
-    void* sendbuf = (void*) pmgr_malloc(sendcount, "Send buffer for socket data");
     void* recvbuf = (void*) pmgr_malloc(sendcount * pmgr_nprocs, "Receive buffer for socket table");
 
-    /* fill in send buffer with our ip:port */
-    memcpy(sendbuf, &ip, sizeof(ip));
-    memcpy((char*)sendbuf + sizeof(ip), &port, sizeof(port));
+    if (!mpirun_use_pmi) {
+        /* fill in send buffer with our ip:port */
+        void* sendbuf = (void*) pmgr_malloc(sendcount, "Send buffer for socket data");
+        memcpy(sendbuf, &ip, sizeof(ip));
+        memcpy((char*)sendbuf + sizeof(ip), &port, sizeof(port));
 
-    /* gather ip:port info to rank 0 -- explicitly call mpirun_gather since tcp tree is not setup */
-    mpirun_gather(sendbuf, sendcount, recvbuf, 0);
+        /* gather ip:port info to rank 0 via mpirun -- explicitly call mpirun_gather since tcp tree is not setup */
+        mpirun_gather(sendbuf, sendcount, recvbuf, 0);
+
+        pmgr_free(sendbuf);
+    } else {
+        /* get the number of bytes we need for our KVS name */
+        int kvslen = 0;
+        if (PMI_KVS_Get_name_length_max(&kvslen) != PMI_SUCCESS) {
+            pmgr_error("Getting maximum length for PMI KVS name @ file %s:%d",
+                __FILE__, __LINE__
+            );
+            PMI_Abort(1, "Failed to get maximum length for PMI KVS space name");
+        }
+
+        /* get the maximum number of bytes allowed for a KVS key */
+        int keylen = 0;
+        if (PMI_KVS_Get_key_length_max(&keylen) != PMI_SUCCESS) {
+            pmgr_error("Getting maximum length for PMI key length @ file %s:%d",
+                __FILE__, __LINE__
+            );
+            PMI_Abort(1, "Failed to get maximum length for PMI key length");
+        }
+
+        /* get the maximum number of bytes allowed for a KVS value */
+        int vallen = 0;
+        if (PMI_KVS_Get_value_length_max(&vallen) != PMI_SUCCESS) {
+            pmgr_error("Getting maximum length for PMI value length @ file %s:%d",
+                __FILE__, __LINE__
+            );
+            PMI_Abort(1, "Failed to get maximum length for PMI value length");
+        }
+
+        /* allocate space to hold kvs name, key, and value */
+        char* kvsstr = (char*) pmgr_malloc(kvslen, "KVS name buffer");
+        char* keystr = (char*) pmgr_malloc(keylen, "KVS key buffer");
+        char* valstr = (char*) pmgr_malloc(vallen, "KVS value buffer");
+
+        /* lookup our KVS name */
+        if (PMI_KVS_Get_my_name(kvsstr, kvslen) != PMI_SUCCESS) {
+            pmgr_error("Could not copy KVS name into buffer @ file %s:%d",
+                __FILE__, __LINE__
+            );
+            PMI_Abort(1, "Could not copy KVS name into buffer");
+        }
+
+        /* insert our IP address, keyed by our rank */
+        if (snprintf(keystr, keylen, "%d", pmgr_me) >= keylen) {
+            pmgr_error("Could not copy rank into key buffer @ file %s:%d",
+                __FILE__, __LINE__
+            );
+            PMI_Abort(1, "Could not copy rank into key buffer");
+        }
+        if (snprintf(valstr, vallen, "%s:%d", inet_ntoa(ip), port) >= vallen) {
+            pmgr_error("Could not copy ip:port into value buffer @ file %s:%d",
+                __FILE__, __LINE__
+            );
+            PMI_Abort(1, "Could not copy ip:port into value buffer");
+        }
+        if (PMI_KVS_Put(kvsstr, keystr, valstr) != PMI_SUCCESS) {
+            pmgr_error("Failed to put IP address in PMI %s/%s @ file %s:%d",
+                keystr, valstr, __FILE__, __LINE__
+            );
+            PMI_Abort(1, "Failed to put IP address in PMI");
+        }
+
+        /* commit our ip:port value and issue a barrier */
+        if (PMI_KVS_Commit(kvsstr) != PMI_SUCCESS) {
+            pmgr_error("Failed to commit IP KVS in PMI @ file %s:%d",
+                __FILE__, __LINE__
+            );
+            PMI_Abort(1, "Failed to commit IP address in PMI");
+        }
+        if (PMI_Barrier() != PMI_SUCCESS) {
+            pmgr_error("Failed to complete barrier after commit in PMI @ file %s:%d",
+                __FILE__, __LINE__
+            );
+            PMI_Abort(1, "Failed to complete barrier after commit in PMI");
+        }
+
+        /* extract ip:port for each process */
+        for(i=0; i < pmgr_nprocs; i++) {
+            /* build the key for this process */
+            if (snprintf(keystr, keylen, "%d", i) >= keylen) {
+                pmgr_error("Could not copy rank %d into key buffer @ file %s:%d",
+                    i, __FILE__, __LINE__
+                );
+                PMI_Abort(1, "Could not copy rank into key buffer");
+            }
+
+            /* extract value for this process */
+            if (PMI_KVS_Get(kvsstr, keystr, valstr, vallen) != PMI_SUCCESS) {
+                pmgr_error("Could not get key/value for %s @ file %s:%d",
+                    keystr, __FILE__, __LINE__
+                );
+                PMI_Abort(1, "Could not copy rank into key buffer");
+            }
+
+            /* break the ip:port string */
+            char* ipstr = strtok(valstr, ":");
+            char* portstr = strtok(NULL, ":");
+
+            /* prepare IP and port to be stored in the table */
+            struct in_addr ip_tmp;
+            if (inet_aton(ipstr, &ip_tmp) == 0) {
+                pmgr_error("Failed to convert dotted decimal notation to struct in_addr for %s @ file %s:%d",
+                    ipstr, __FILE__, __LINE__
+                );
+                PMI_Abort(1, "Could not convert IP address string to struct");
+            }
+            short port_tmp = atoi(portstr);
+
+            /* write the ip and port to our table */
+            memcpy((char*)recvbuf + sendcount*i,                  &ip_tmp,   sizeof(ip_tmp));
+            memcpy((char*)recvbuf + sendcount*i + sizeof(ip_tmp), &port_tmp, sizeof(port_tmp));
+        }
+
+        /* free the kvs name, key, and value */
+        pmgr_free(valstr);
+        pmgr_free(keystr);
+        pmgr_free(kvsstr);
+    }
 
     /* if i'm not rank 0, accept a connection (from parent) and receive socket table */
     if (pmgr_me != 0) {
@@ -765,12 +936,15 @@ static int pmgr_open_tree()
 	parent_len = sizeof(parent_addr);
         pmgr_parent_s = accept(sockfd, (struct sockaddr *) &parent_addr, &parent_len);
         if (pmgr_parent_s >= 0) {
-            if (pmgr_read_collective(&pmgr_parent_s, recvbuf, sendcount * pmgr_nprocs) < 0) {
-                pmgr_error("Receiving IP:port table from parent failed @ file %s:%d",
-                    __FILE__, __LINE__
-                );
-                pmgr_abort_tree();
-                exit(1);
+            if (!mpirun_use_pmi) {
+                /* if we're not using PMI, we need to read the ip:port table */
+                if (pmgr_read_collective(&pmgr_parent_s, recvbuf, sendcount * pmgr_nprocs) < 0) {
+                    pmgr_error("Receiving IP:port table from parent failed @ file %s:%d",
+                        __FILE__, __LINE__
+                    );
+                    pmgr_abort_tree();
+                    exit(1);
+                }
             }
         } else {
             pmgr_error("Failed to accept parent connection (%m errno=%d) @ file %s:%d",
@@ -788,13 +962,15 @@ static int pmgr_open_tree()
         pmgr_child_port[i] = * (short*) ((char*)recvbuf + sendcount*c + sizeof(ip));
         pmgr_child_s[i]    = pmgr_connect(pmgr_child_ip[i], pmgr_child_port[i]);
         if (pmgr_child_s[i] >= 0) {
-            /* connected to child, now forward IP table */
-            if (pmgr_write_collective(&pmgr_child_s[i], recvbuf, sendcount * pmgr_nprocs) < 0) {
-                pmgr_error("Writing IP:port table to child (rank %d) at %s:%d failed @ file %s:%d",
-                    pmgr_child[i], inet_ntoa(pmgr_child_ip[i]), htons(pmgr_child_port[i]), __FILE__, __LINE__
-                );
-                pmgr_abort_tree();
-                exit(1);
+            if (!mpirun_use_pmi) {
+                /* connected to child, now forward IP table */
+                if (pmgr_write_collective(&pmgr_child_s[i], recvbuf, sendcount * pmgr_nprocs) < 0) {
+                    pmgr_error("Writing IP:port table to child (rank %d) at %s:%d failed @ file %s:%d",
+                        pmgr_child[i], inet_ntoa(pmgr_child_ip[i]), htons(pmgr_child_port[i]), __FILE__, __LINE__
+                    );
+                    pmgr_abort_tree();
+                    exit(1);
+                }
             }
         } else {
             /* failed to connect to child */
@@ -809,7 +985,6 @@ static int pmgr_open_tree()
     /* check whether everyone succeeded in connecting */
     pmgr_check_tree(rc == PMGR_SUCCESS);
 
-    pmgr_free(sendbuf);
     pmgr_free(recvbuf);
 
     return rc;
@@ -911,16 +1086,14 @@ static int pmgr_scatter_tree(void* sendbuf, int sendcount, void* recvbuf)
 
     /* if i have any children, scatter data to them */
     int i;
-    int offset = sendcount;
-    for(i=0; i<pmgr_num_child; i++) {
-        if (pmgr_write_collective(&pmgr_child_s[i], (char*)bigbuf + offset, sendcount * pmgr_child_incl[i]) < 0) {
+    for(i=0; i < pmgr_num_child; i++) {
+        if (pmgr_write_collective(&pmgr_child_s[i], (char*)bigbuf + sendcount * (pmgr_child[i] - pmgr_me), sendcount * pmgr_child_incl[i]) < 0) {
             pmgr_error("Scattering data to child (rank %d) at %s:%d failed @ file %s:%d",
                 pmgr_child[i], inet_ntoa(pmgr_child_ip[i]), htons(pmgr_child_port[i]), __FILE__, __LINE__
             );
             pmgr_abort_tree();
             exit(1);
         }
-        offset += sendcount * pmgr_child_incl[i];
     }
 
     /* copy my data into my receive buffer */
@@ -978,6 +1151,86 @@ static int pmgr_reducemaxint_tree(int* sendint, int* recvint)
     return all_success;
 }
 
+/* alltoall sendcount bytes from each process to each process via tree */
+static int pmgr_alltoall_tree(void* sendbuf, int sendcount, void* recvbuf)
+{
+    /* compute total number of bytes we'll receive from children and send to our parent */
+    int tmp_recv_count = (pmgr_num_child_incl)   * pmgr_nprocs * sendcount;
+    int tmp_send_count = (pmgr_num_child_incl+1) * pmgr_nprocs * sendcount;
+
+    /* allocate temporary buffers to hold the data */
+    void* tmp_recv_buf = NULL;
+    void* tmp_send_buf = NULL;
+    if (tmp_recv_count > 0) {
+        tmp_recv_buf = (void*) pmgr_malloc(tmp_recv_count, "Temporary recv buffer");
+    }
+    if (tmp_send_count > 0) {
+        tmp_send_buf = (void*) pmgr_malloc(tmp_send_count, "Temporary send buffer");
+    }
+
+    /* if i have any children, receive their data */
+    int i;
+    int offset = 0;
+    for(i=pmgr_num_child-1; i>=0; i--) {
+        if (pmgr_read_collective(&pmgr_child_s[i], (char*)tmp_recv_buf + offset, pmgr_nprocs * sendcount * pmgr_child_incl[i]) < 0) {
+            pmgr_error("Gathering data from child (rank %d) at %s:%d failed @ file %s:%d",
+                pmgr_child[i], inet_ntoa(pmgr_child_ip[i]), htons(pmgr_child_port[i]), __FILE__, __LINE__
+            );
+            pmgr_abort_tree();
+            exit(1);
+        }
+        offset += pmgr_nprocs * sendcount * pmgr_child_incl[i];
+    }
+
+    /* order data by destination process */
+    int j;
+    offset = 0;
+    for(j=0; j < pmgr_nprocs; j++) {
+        /* copy my own data into send buffer */
+        memcpy(tmp_send_buf + offset, (char*)sendbuf + sendcount * j, sendcount);
+        offset += sendcount;
+
+        /* copy each entry of our child data */
+        int child_count = 0;
+        for(i=pmgr_num_child-1; i>=0; i--) {
+            memcpy(tmp_send_buf + offset,
+                   (char*)tmp_recv_buf + pmgr_nprocs * sendcount * child_count + sendcount * j * pmgr_child_incl[i],
+                   sendcount * pmgr_child_incl[i]
+            );
+            offset += sendcount * pmgr_child_incl[i];
+            child_count += pmgr_child_incl[i];
+        }
+    }
+
+    /* if i'm not rank 0, send to parent and free temporary buffer */
+    if (pmgr_me != 0) {
+        if (pmgr_write_collective(&pmgr_parent_s, tmp_send_buf, tmp_send_count) < 0) {
+            pmgr_error("Sending alltoall data to parent failed @ file %s:%d",
+                __FILE__, __LINE__
+            );
+            pmgr_abort_tree();
+            exit(1);
+        }
+    }
+
+    /* scatter data from rank 0 */
+    pmgr_scatter(tmp_send_buf, sendcount * pmgr_nprocs, recvbuf, 0);
+
+    /* free our temporary buffers */
+    if (tmp_recv_buf != NULL) {
+      free(tmp_recv_buf);
+      tmp_recv_buf = NULL;
+    }
+    if (tmp_send_buf != NULL) {
+      free(tmp_send_buf);
+      tmp_send_buf = NULL;
+    }
+
+    /* check that everyone succeeded */
+    int all_success = pmgr_check_tree(1);
+    return all_success;
+}
+
 /*
  * =============================
  * The pmgr_* collectives are the user interface (what the MPI tasks call).
@@ -994,7 +1247,7 @@ int pmgr_barrier()
     int rc = PMGR_SUCCESS;
 
     /* check whether we have an mpirun process */
-    if (mpirun_hostname != NULL) {
+    if (pmgr_nprocs > 1) {
         if (mpirun_use_trees) {
             /* just issue a check tree using success */
             rc = pmgr_check_tree(1);
@@ -1023,7 +1276,7 @@ int pmgr_bcast(void* buf, int sendcount, int root)
     int rc = PMGR_SUCCESS;
 
     /* check whether we have an mpirun process */
-    if (mpirun_hostname != NULL) {
+    if (pmgr_nprocs > 1) {
         /* if root is rank 0 and bcast tree is enabled, use it */
         /* (this is a common case) */
         if (root == 0 && mpirun_use_trees && mpirun_use_bcast_tree) {
@@ -1052,7 +1305,7 @@ int pmgr_gather(void* sendbuf, int sendcount, void* recvbuf, int root)
     int rc = PMGR_SUCCESS;
 
     /* check whether we have an mpirun process */
-    if (mpirun_hostname != NULL) {
+    if (pmgr_nprocs > 1) {
         /* if root is rank 0 and gather tree is enabled, use it */
         /* (this is a common case) */
         if (root == 0 && mpirun_use_trees && mpirun_use_gather_tree) {
@@ -1061,7 +1314,7 @@ int pmgr_gather(void* sendbuf, int sendcount, void* recvbuf, int root)
             rc = mpirun_gather(sendbuf, sendcount, recvbuf, root);
         }
     } else {
-        /* no mpirun process, just copy the data over */
+        /* just a single process, just copy the data over */
         memcpy(recvbuf, sendbuf, sendcount);
     }
 
@@ -1083,7 +1336,7 @@ int pmgr_scatter(void* sendbuf, int sendcount, void* recvbuf, int root)
     int rc = PMGR_SUCCESS;
 
     /* check whether we have an mpirun process */
-    if (mpirun_hostname != NULL) {
+    if (pmgr_nprocs > 1) {
         /* if root is rank 0 and gather tree is enabled, use it */
         /* (this is a common case) */
         if (root == 0 && mpirun_use_trees && mpirun_use_scatter_tree) {
@@ -1092,7 +1345,7 @@ int pmgr_scatter(void* sendbuf, int sendcount, void* recvbuf, int root)
             rc = mpirun_scatter(sendbuf, sendcount, recvbuf, root);
         }
     } else {
-        /* no mpirun process, just copy the data over */
+        /* just a single process, just copy the data over */
         memcpy(recvbuf, sendbuf, sendcount);
     }
 
@@ -1114,7 +1367,7 @@ int pmgr_allgather(void* sendbuf, int sendcount, void* recvbuf)
     int rc = PMGR_SUCCESS;
 
     /* check whether we have an mpirun process */
-    if (mpirun_hostname != NULL) {
+    if (pmgr_nprocs > 1) {
         if (mpirun_use_trees) {
             /* gather data to rank 0 */
             int tmp_rc;
@@ -1141,7 +1394,7 @@ int pmgr_allgather(void* sendbuf, int sendcount, void* recvbuf)
             rc = mpirun_allgather(sendbuf, sendcount, recvbuf);
         }
     } else {
-        /* no mpirun process, just copy the data over */
+        /* just a single process, just copy the data over */
         memcpy(recvbuf, sendbuf, sendcount);
     }
 
@@ -1163,10 +1416,14 @@ int pmgr_alltoall(void* sendbuf, int sendcount, void* recvbuf)
     int rc = PMGR_SUCCESS;
 
     /* check whether we have an mpirun process */
-    if (mpirun_hostname != NULL) {
-        rc = mpirun_alltoall(sendbuf, sendcount, recvbuf);
+    if (pmgr_nprocs > 1) {
+        if (mpirun_use_gather_tree && mpirun_use_scatter_tree) {
+            rc = pmgr_alltoall_tree(sendbuf, sendcount, recvbuf);
+        } else {
+            rc = mpirun_alltoall(sendbuf, sendcount, recvbuf);
+        }
     } else {
-        /* no mpirun process, just copy the data over */
+        /* just a single process, just copy the data over */
         memcpy(recvbuf, sendbuf, sendcount);
     }
 
@@ -1297,10 +1554,6 @@ int pmgr_allgatherstr(char* sendstr, char*** recvstr, char** recvbuf)
     return rc;
 }
 
-/*
- * Open socket to mpirun launch process, then send protocol version and rank
- * number
- */
 int pmgr_open()
 {
     struct timeval start, end;
@@ -1312,42 +1565,47 @@ int pmgr_open()
     pmgr_backoff_rand_seed = time_open.tv_usec + pmgr_me;
 
     /* check whether we have an mpirun process */
-    if (mpirun_hostname != NULL) {
-        struct hostent* mpirun_hostent = gethostbyname(mpirun_hostname);
-        if (!mpirun_hostent) {
-            pmgr_error("Hostname lookup of mpirun failed (gethostbyname(%s) %s h_errno=%d) @ file %s:%d",
-                mpirun_hostname, hstrerror(h_errno), h_errno, __FILE__, __LINE__);
-            exit(1);
+    if (pmgr_nprocs > 1) {
+        if (!mpirun_use_pmi) {
+            /* open connection back to mpirun process */
+            struct hostent* mpirun_hostent = gethostbyname(mpirun_hostname);
+            if (!mpirun_hostent) {
+                pmgr_error("Hostname lookup of mpirun failed (gethostbyname(%s) %s h_errno=%d) @ file %s:%d",
+                    mpirun_hostname, hstrerror(h_errno), h_errno, __FILE__, __LINE__
+                );
+                exit(1);
+            }
+
+            mpirun_socket = pmgr_connect(*(struct in_addr *) (*mpirun_hostent->h_addr_list),
+                                         htons(mpirun_port));
+            if (mpirun_socket == -1) {
+                pmgr_error("Connecting mpirun socket to %s at %s:%d failed @ file %s:%d",
+                    mpirun_hostent->h_name, inet_ntoa(*(struct in_addr *) (*mpirun_hostent->h_addr_list)),
+                    mpirun_port, __FILE__, __LINE__
+                );
+                exit(1);
+            }
+
+            /* we are now connected to the mpirun process */
+
+            /* 
+             * Exchange information with mpirun.  If you make any changes
+             * to this protocol, be sure to increment the version number
+             * in the header file.  This is to permit compatibility with older
+             * executables.
+             */
+
+            /* send version number, then rank */
+            pmgr_write_int(PMGR_COLLECTIVE);
+            pmgr_write(&pmgr_me, sizeof(pmgr_me));
         }
-
-        mpirun_socket = pmgr_connect(*(struct in_addr *) (*mpirun_hostent->h_addr_list),
-                                     htons(mpirun_port));
-        if (mpirun_socket == -1) {
-            pmgr_error("Connecting mpirun socket to %s at %s:%d failed @ file %s:%d",
-                mpirun_hostent->h_name, inet_ntoa(*(struct in_addr *) (*mpirun_hostent->h_addr_list)),
-                mpirun_port, __FILE__, __LINE__);
-            exit(1);
-        }
-
-        /* we are now connected to the mpirun process */
-
-        /* 
-         * Exchange information with mpirun.  If you make any changes
-         * to this protocol, be sure to increment the version number
-         * in the header file.  This is to permit compatibility with older
-         * executables.
-         */
-
-        /* send version number, then rank */
-        pmgr_write_int(PMGR_COLLECTIVE);
-        pmgr_write(&pmgr_me, sizeof(pmgr_me));
 
         /* open up socket tree, if enabled */
         if (mpirun_use_trees) {
             pmgr_open_tree();
         }
     }
-    /* if there is no mpirun process, we don't need to open a connection here */
+    /* just a single process, we don't need to open a connection here */
 
     pmgr_gettimeofday(&end);
     pmgr_debug(2, "Exiting pmgr_open(), took %f seconds for %d procs", pmgr_getsecs(&end,&start), pmgr_nprocs);
@@ -1364,7 +1622,7 @@ int pmgr_close()
     pmgr_debug(3, "Starting pmgr_close()");
 
     /* check whether we have an mpirun process */
-    if (mpirun_hostname != NULL) {
+    if (pmgr_nprocs > 1) {
         /* shut down the tree, if enabled */
         if (mpirun_use_trees) {
             /* issue a barrier before closing tree to check that everyone makes it here */
@@ -1372,14 +1630,14 @@ int pmgr_close()
             pmgr_close_tree();
         }
 
-        /* send CLOSE op code, then close socket */
-        pmgr_write_int(PMGR_CLOSE);
         if (mpirun_socket >= 0) {
+            /* send CLOSE op code, then close socket */
+            pmgr_write_int(PMGR_CLOSE);
             close(mpirun_socket);
             mpirun_socket = -1;
         }
     }
-    /* if there is no mpirun process, there is nothing to close */
+    /* just a single process, there is nothing to close */
 
     pmgr_gettimeofday(&end);
     pmgr_gettimeofday(&time_close);
@@ -1486,6 +1744,53 @@ int pmgr_init(int *argc_p, char ***argv_p, int *np_p, int *me_p, int *id_p)
             mpirun_connect_random = atoi(value);
     }
 
+    /* use pmi instead of socket connections to mpirun */
+    if ((value = pmgr_getenv("MPIRUN_USE_PMI", ENV_OPTIONAL))) {
+            mpirun_use_pmi = atoi(value);
+    }
+
+    /* initialize PMI library if we're using it, and get rank, ranks, and jobid from PMI */
+    if (mpirun_use_pmi) {
+        /* initialize the PMI library */
+        int spawned = 0;
+        if (PMI_Init(&spawned) != PMI_SUCCESS) {
+            pmgr_error("Failed to initialize PMI library @ file %s:%d",
+                __FILE__, __LINE__
+            );
+            PMI_Abort(1, "Failed to initialize PMI library");
+        }
+        if (spawned) {
+            pmgr_error("Spawned processes not supported @ file %s:%d",
+                __FILE__, __LINE__
+            );
+            PMI_Abort(1, "Spawned processes not supported");
+        }
+
+        /* get my rank */
+        if (PMI_Get_rank(&pmgr_me) != PMI_SUCCESS) {
+            pmgr_error("Getting rank @ file %s:%d",
+                __FILE__, __LINE__
+            );
+            PMI_Abort(1, "Failed to get rank from PMI");
+        }
+
+        /* get the number of ranks in this job */
+        if (PMI_Get_size(&pmgr_nprocs) != PMI_SUCCESS) {
+            pmgr_error("Getting number of ranks in job @ file %s:%d",
+                __FILE__, __LINE__
+            );
+            PMI_Abort(1, "Failed to get number of ranks in job");
+        }
+
+        /* get jobid */
+        if (PMI_Get_appnum(&pmgr_id) != PMI_SUCCESS) {
+            pmgr_error("Getting job id @ file %s:%d",
+                __FILE__, __LINE__
+            );
+            PMI_Abort(1, "Failed to get job id from PMI");
+        }
+    }
+
     /* =======================================================
      * Check that we have valid values
      * ======================================================= */
@@ -1513,40 +1818,39 @@ int pmgr_init(int *argc_p, char ***argv_p, int *np_p, int *me_p, int *id_p)
     pmgr_debug(3, "In pmgr_init():\n" \
         "  MPIRUN_RANK: %d, MPIRUN_NPROCS: %d, MPIRUN_ID: %d, MPIRUN_HOST: %s, MPIRUN_PORT: %d\n" \
         "  MPIRUN_USE_TREES: %d, MPIRUN_USE_GATHER_TREE: %d, MPIRUN_USE_SCATTER_TREE: %d, MPIRUN_USE_BCAST_TREE: %d\n" \
-        "  MPIRUN_CONNECT_TRIES: %d, MPIRUN_CONNECT_TIMEOUT: %d, MPIRUN_CONNECT_BACKOFF: %d, MPIRUN_CONNECT_RANDOM: %d",
+        "  MPIRUN_CONNECT_TRIES: %d, MPIRUN_CONNECT_TIMEOUT: %d, MPIRUN_CONNECT_BACKOFF: %d, MPIRUN_CONNECT_RANDOM: %d" \
+        "  MPIRUN_USE_PMI: %d",
         pmgr_me, pmgr_nprocs, pmgr_id, mpirun_hostname, mpirun_port,
         mpirun_use_trees, mpirun_use_gather_tree, mpirun_use_scatter_tree, mpirun_use_bcast_tree,
-        mpirun_connect_tries, mpirun_connect_timeout, mpirun_connect_backoff, mpirun_connect_random
+        mpirun_connect_tries, mpirun_connect_timeout, mpirun_connect_backoff, mpirun_connect_random,
+        mpirun_use_pmi
     );
 
     /* check that we have a valid number of processes */
     if (pmgr_nprocs <= 0) {
-        pmgr_error("Invalid MPIRUN_NPROCS %s @ file %s:%d",
-            pmgr_getenv("MPIRUN_NPROCS", ENV_REQUIRED), __FILE__, __LINE__);
+        pmgr_error("Invalid NPROCS %s @ file %s:%d",
+            pmgr_nprocs, __FILE__, __LINE__
+        );
         exit(1);
     }
 
     /* check that our rank is valid */
     if (pmgr_me < 0 || pmgr_me >= pmgr_nprocs) {
-        pmgr_error("Invalid MPIRUN_RANK %s @ file %s:%d",
-            pmgr_getenv("MPIRUN_RANK", ENV_REQUIRED), __FILE__, __LINE__);
+        pmgr_error("Invalid RANK %s @ file %s:%d",
+            pmgr_me, __FILE__, __LINE__
+        );
         exit(1);
     }
 
     /* check that we have a valid jobid */
     if (pmgr_id == 0) {
-        pmgr_error("Invalid MPIRUN_ID %s @ file %s:%d",
-            pmgr_getenv("MPIRUN_ID", ENV_REQUIRED), __FILE__, __LINE__);
+        pmgr_error("Invalid JOBID %s @ file %s:%d",
+            pmgr_id, __FILE__, __LINE__
+        );
         exit(1);
     }
 
-    /* check that we have a valid mpirun port */
-    if (mpirun_port <= 0) {
-        pmgr_error("Invalid MPIRUN_PORT %s @ file %s:%d",
-            pmgr_getenv("MPIRUN_PORT", ENV_REQUIRED), __FILE__, __LINE__);
-        exit(1);
-    }
-
+    /* set parameters */
     *np_p = pmgr_nprocs;
     *me_p = pmgr_me;
     *id_p = pmgr_id;
@@ -1561,6 +1865,15 @@ int pmgr_init(int *argc_p, char ***argv_p, int *np_p, int *me_p, int *id_p)
  */
 int pmgr_finalize()
 {
+    /* shut down the PMI library if we're using it */
+    if (mpirun_use_pmi) {
+        if (PMI_Finalize() != PMI_SUCCESS) {
+            pmgr_error("Failed to finalize PMI library @ file %s:%d",
+                __FILE__, __LINE__
+            );
+        }
+    }
+
     pmgr_free(mpirun_hostname);
     return PMGR_SUCCESS;
 }
@@ -1604,19 +1917,26 @@ int pmgr_abort(int code, const char *fmt, ...)
         pmgr_abort_tree();
     }
 
+    /* build our error message */
+    va_start(ap, fmt);
+    vprint_msg(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+
     /* check whether we have an mpirun process */
-    if (mpirun_hostname != NULL) {
+    if (mpirun_hostname != NULL && !mpirun_use_pmi) {
         he = gethostbyname(mpirun_hostname);
         if (!he) {
             pmgr_error("pmgr_abort: Hostname lookup of mpirun failed (gethostbyname(%s) %s h_errno=%d) @ file %s:%d",
-                mpirun_hostname, hstrerror(h_errno), h_errno, __FILE__, __LINE__);
+                mpirun_hostname, hstrerror(h_errno), h_errno, __FILE__, __LINE__
+            );
             return -1;
         }
 
         s = socket(AF_INET, SOCK_STREAM, 0);
         if (s < 0) {
             pmgr_error("pmgr_abort: Failed to create socket (socket() %m errno=%d) @ file %s:%d",
-                errno, __FILE__, __LINE__);
+                errno, __FILE__, __LINE__
+            );
             return -1;
         }
 
@@ -1626,13 +1946,10 @@ int pmgr_abort(int code, const char *fmt, ...)
         sin.sin_port = htons(mpirun_port);
         if (connect(s, (struct sockaddr *) &sin, sizeof(sin)) < 0) {
             pmgr_error("pmgr_abort: Connect to mpirun failed (connect() %m errno=%d) @ file %s:%d",
-                errno, __FILE__, __LINE__);
+                errno, __FILE__, __LINE__
+            );
             return -1;
         }
-
-        va_start(ap, fmt);
-        vprint_msg(buf, sizeof(buf), fmt, ap);
-        va_end(ap);
 
         /* write an abort code (may be destination rank), our rank to mpirun */
         pmgr_write_fd(s, &code, sizeof(code));
@@ -1645,11 +1962,12 @@ int pmgr_abort(int code, const char *fmt, ...)
 
         close(s);
     } else { /* check that (mpirun_hostname != NULL) */
-        va_start(ap, fmt);
-        vprint_msg(buf, sizeof(buf), fmt, ap);
-        va_end(ap);
         /* TODO: want to echo this message here?  Want to do this for every user abort? */
         pmgr_error("Called pmgr_abort() Code: %d, Msg: %s", code, buf);
+    }
+
+    if (mpirun_use_pmi) {
+        PMI_Abort(code, buf);
     }
 
     return PMGR_SUCCESS;

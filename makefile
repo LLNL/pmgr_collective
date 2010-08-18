@@ -6,11 +6,11 @@ all: clean
 	mkdir include
 	cd src && \
 	  gcc $(OPT) -fPIC -Wall -c -o pmgr_collective_common.o pmgr_collective_common.c && \
-	  gcc $(OPT) -fPIC -Wall -c -o pmgr_collective_client.o pmgr_collective_client.c && \
+	  gcc $(OPT) -fPIC -Wall -c -o pmgr_collective_client.o pmgr_collective_client.c -I/usr/include/slurm && \
 	  gcc $(OPT) -fPIC -Wall -c -o pmgr_collective_mpirun.o pmgr_collective_mpirun.c && \
 	  ar rcs libpmgr_collective.a pmgr_collective_common.o pmgr_collective_client.o pmgr_collective_mpirun.o && \
 	  gcc $(OPT) -fPIC -shared -Wl,-soname,libpmgr_collective.so.1 -o libpmgr_collective.so.1.0.1 \
-		pmgr_collective_common.o pmgr_collective_client.o pmgr_collective_mpirun.o && \
+		pmgr_collective_common.o pmgr_collective_client.o pmgr_collective_mpirun.o -lpmi && \
 	  mv libpmgr_collective.a        ../lib/. && \
 	  mv libpmgr_collective.so.1.0.1 ../lib/. && \
 	  ln -s libpmgr_collective.so.1.0.1 ../lib/libpmgr_collective.so.1 && \
