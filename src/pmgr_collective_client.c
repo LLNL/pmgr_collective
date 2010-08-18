@@ -812,6 +812,7 @@ static int pmgr_open_tree()
 
         pmgr_free(sendbuf);
     } else {
+#ifdef HAVE_PMI
         /* get the number of bytes we need for our KVS name */
         int kvslen = 0;
         if (PMI_KVS_Get_name_length_max(&kvslen) != PMI_SUCCESS) {
@@ -927,6 +928,7 @@ static int pmgr_open_tree()
         pmgr_free(valstr);
         pmgr_free(keystr);
         pmgr_free(kvsstr);
+#endif /* ifdef HAVE_PMI */
     }
 
     /* if i'm not rank 0, accept a connection (from parent) and receive socket table */
@@ -1726,31 +1728,41 @@ int pmgr_init(int *argc_p, char ***argv_p, int *np_p, int *me_p, int *id_p)
     }
 
     if ((value = pmgr_getenv("MPIRUN_CONNECT_TRIES", ENV_OPTIONAL))) {
-            mpirun_connect_tries = atoi(value);
+        mpirun_connect_tries = atoi(value);
     }
 
     /* seconds */
     if ((value = pmgr_getenv("MPIRUN_CONNECT_TIMEOUT", ENV_OPTIONAL))) {
-            mpirun_connect_timeout = atoi(value);
+        mpirun_connect_timeout = atoi(value);
     }
 
     /* seconds */
     if ((value = pmgr_getenv("MPIRUN_CONNECT_BACKOFF", ENV_OPTIONAL))) {
-            mpirun_connect_backoff = atoi(value);
+        mpirun_connect_backoff = atoi(value);
     }
 
     /* enable/disable radomized option in backoff */
     if ((value = pmgr_getenv("MPIRUN_CONNECT_RANDOM", ENV_OPTIONAL))) {
-            mpirun_connect_random = atoi(value);
+        mpirun_connect_random = atoi(value);
     }
 
     /* use pmi instead of socket connections to mpirun */
     if ((value = pmgr_getenv("MPIRUN_USE_PMI", ENV_OPTIONAL))) {
-            mpirun_use_pmi = atoi(value);
+#ifdef HAVE_PMI
+        mpirun_use_pmi = atoi(value);
+#else /* ifdef HAVE_PMI */
+        /* PMI was not compiled in, warn user that we're ignoring this value */
+        if (pmgr_me == 0) {
+            pmgr_error("Not built with PMI support, ignoring MPIRUN_USE_PMI @ %s:%d",
+                __FILE__, __LINE__
+            );
+        }
+#endif /* ifdef HAVE_PMI */
     }
 
     /* initialize PMI library if we're using it, and get rank, ranks, and jobid from PMI */
     if (mpirun_use_pmi) {
+#ifdef HAVE_PMI
         /* initialize the PMI library */
         int spawned = 0;
         if (PMI_Init(&spawned) != PMI_SUCCESS) {
@@ -1789,6 +1801,7 @@ int pmgr_init(int *argc_p, char ***argv_p, int *np_p, int *me_p, int *id_p)
             );
             PMI_Abort(1, "Failed to get job id from PMI");
         }
+#endif /* ifdef HAVE_PMI */
     }
 
     /* =======================================================
@@ -1867,11 +1880,13 @@ int pmgr_finalize()
 {
     /* shut down the PMI library if we're using it */
     if (mpirun_use_pmi) {
+#ifdef HAVE_PMI
         if (PMI_Finalize() != PMI_SUCCESS) {
             pmgr_error("Failed to finalize PMI library @ file %s:%d",
                 __FILE__, __LINE__
             );
         }
+#endif /* ifdef HAVE_PMI */
     }
 
     pmgr_free(mpirun_hostname);
@@ -1967,7 +1982,9 @@ int pmgr_abort(int code, const char *fmt, ...)
     }
 
     if (mpirun_use_pmi) {
+#ifdef HAVE_PMI
         PMI_Abort(code, buf);
+#endif /* ifdef HAVE_PMI */
     }
 
     return PMGR_SUCCESS;
