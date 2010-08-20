@@ -22,11 +22,21 @@ all tasks must call them in the same order and with consistent parameters.
 MPI may invoke any number of collectives, in any order, passing an arbitrary
 amount of data.  All message sizes are specified in bytes.
 
-The library consists of two interfaces, one which is called by the job
-launcher (e.g., mpirun) and one which is called by the MPI tasks:
+The library interface is defined in pmgr_collective_client.h.
 
-  pmgr_collective_mpirun - called by mpirun
-  pmgr_collective_client - called by the MPI tasks
+An MPI task should make calls in the following sequenece:
+  pmgr_init
+  pmgr_open
+  [pmgr_collectives]
+  pmgr_close
+  pmgr_finalize
+All functions return PMGR_SUCCESS on successful completion.
+
+In addition, the job launcher must provide some functionality.
+It must either implement the collective protocol defined
+in pmgr_collective_mpirun, or it must provide a PMI library.
+As a convenience, we implement a simple (non-scalable) interface
+in pmgr_collective_mpirun that can be called from the job launcher.
 
 pmgr_collective_mpirun - called by mpirun
   The mpirun process should call pmgr_processops after accepting connections
@@ -41,14 +51,9 @@ pmgr_collective_mpirun - called by mpirun
   are encountered, it will close all socket file descriptors before returning.
   It returns PMGR_SUCCESS on successful completion.
 
-pmgr_collective_client - called by the MPI tasks
-  An MPI task should make calls in the following sequenece:
-    pmgr_init
-    pmgr_open
-    [pmgr_collectives]
-    pmgr_close
-    pmgr_finalize
-  All functions return PMGR_SUCCESS on successful completion.
+For large systems, one should implement a more scalable mechanism
+than this simple implementation, or one should provide an efficient
+implementation of PMI.
 
 ====================================================
 Environment Variables for mpirun
@@ -67,7 +72,8 @@ Environment Variables for the Client
 ====================================================
 All environment variables are read when a client calls pmgr_init().
 
-The following variables must be set to define the client's MPI context:
+If the PMI library is not used, the following variables must be
+set to define the client's MPI context:
 
   MPIRUN_NPROCS - number of MPI processes in job       must be >0
   MPIRUN_RANK   - the client's MPI rank in the job     must be in [0,N-1]
@@ -99,6 +105,21 @@ at compile time, for example:
   -DMPIRUN_CONNECT_BACKOFF=10
   -DMPIRUN_CONNECT_TRIES=20
   -DMPIRUN_CONNECT_RANDOM=1
+
+To enable support for the PMI library, define the following at compile time:
+
+  -DHAVE_PMI
+
+Even when support for the PMI library is compiled in, calls to the PMI
+library are disabled by default.  To force PMGR_COLLECTIVE to use PMI,
+set the following variable at run time:
+
+  MPIRUN_USE_PMI=1
+
+One can configure PMGR_COLLECTIVE to use PMI by default by defining
+the following at compile time:
+
+  -DHAVE_PMI -DMPIRUN_USE_PMI=1
  
 Debug statements can be turned on for troubleshooting or timing.  There are
 three basic debug verbosity levels.  For each of these, there is a way to
@@ -141,13 +162,18 @@ log(N) scalable algorithms for:
   pmgr_gather  (when rank 0 is the root)
   pmgr_scatter (when rank 0 is the root)
 
+The tree is also used for alltoall, although it's not a log(N) algorithm.  Basically,
+the alltoall is implemented as a gather to rank 0 (with data reordering) followed by
+a scatter from rank 0.
+
+  pmgr_alltoall
+
 The remaining collectives are implemented via mpirun support, which typically amounts to a
 flat tree with mpirun as the root.  These collectives thus scale linearly:
 
   pmgr_bcast   (when rank 0 is not the root)
   pmgr_gather  (when rank 0 is not the root)
   pmgr_scatter (when rank 0 is not the root)
-  pmgr_alltoall
 
 This implementation works best if the TCP socket each task opens corresponds to a port
 on a switched network so that multiple nodes may send and receive data at the same time.
@@ -155,22 +181,14 @@ on a switched network so that multiple nodes may send and receive data at the sa
 It's possible to disable / enable the binomial tree at runtime:
 
   MPIRUN_USE_TREES={0,1}        - disable/enable binomial tree for all operations (also avoids setup and teardown)
-  MPIRUN_USE_GATHER_TREE={0,1}  - disable/enable binomial tree for gather operations
-  MPIRUN_USE_SCATTER_TREE={0,1} - disable/enable binomial tree for scatter operations
-  MPIRUN_USE_BCAST_TREE={0,1}   - disable/enable binomial tree for bcast operations
 
-If a tree is disabled, then the collective will fallback to the mpirun
+If the trees are disabled, then the collective will fall back to the mpirun
 support, which is typically a flat tree with the mpirun process at the root.
 
-By default, the TREE environment variables are all enabled.  The library can be
-built with these variables disabled by default.  To do this, define the appropriate
-macros on the compile line.  For example, to disable all by default, you'd include
-all of the following in your compile flags:
+By default, the tree is enabled by default.  The library can be built with the tree disabled
+by default.  To do this, include the following in your compile flags:
 
   -DMPIRUN_USE_TREES=0
-  -DMPIRUN_USE_GATHER_TREE=0
-  -DMPIRUN_USE_SCATTER_TREE=0
-  -DMPIRUN_USE_BCAST_TREE=0
 
 ====================================================
 Ideas for Future Work (if the demand arises)

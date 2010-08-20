@@ -55,21 +55,13 @@
 
 #define PMGR_DEBUG_LEVELS (3)
 
+/* packet headers for messages in tree */
 #define PMGR_TREE_HEADER_ABORT      (0)
 #define PMGR_TREE_HEADER_COLLECTIVE (1)
 
-/* set env variable to select which trees to use, if any -- all enabled by default */
+/* set env variable whether to use trees */
 #ifndef MPIRUN_USE_TREES
 #define MPIRUN_USE_TREES (1)
-#endif
-#ifndef MPIRUN_USE_GATHER_TREE
-#define MPIRUN_USE_GATHER_TREE (1)
-#endif
-#ifndef MPIRUN_USE_SCATTER_TREE
-#define MPIRUN_USE_SCATTER_TREE (1)
-#endif
-#ifndef MPIRUN_USE_BCAST_TREE
-#define MPIRUN_USE_BCAST_TREE (1)
 #endif
 
 /* set env variable to configure socket timeout parameters */
@@ -86,29 +78,36 @@
 #define MPIRUN_CONNECT_RANDOM (1) /* enable/disable randomized option for backoff */
 #endif
 
-/* set envvar MPIRUN_USE_TREES={0,1} to disable/enable tree algorithms */
-static int mpirun_use_trees       = MPIRUN_USE_TREES;
-/* set envvar MPIRUN_USE_GATHER_TREE={0,1} to disable/enable gather tree */
-static int mpirun_use_gather_tree  = MPIRUN_USE_GATHER_TREE;
-/* set envvar MPIRUN_USE_SCATTER_TREE={0,1} to disable/enable scatter tree */
-static int mpirun_use_scatter_tree = MPIRUN_USE_SCATTER_TREE;
-/* set envvar MPIRUN_USE_BCAST_TREE={0,1} to disable/enable bcast tree */
-static int mpirun_use_bcast_tree  = MPIRUN_USE_BCAST_TREE;
+/* whether to invoke PMI library to bootstrap PMGR_COLLECTIVE */
+#ifndef MPIRUN_USE_PMI
+#define MPIRUN_USE_PMI (0)
+#endif
 
+/* parameters for connection attempts */
 static int mpirun_connect_tries    = MPIRUN_CONNECT_TRIES;
 static int mpirun_connect_timeout  = MPIRUN_CONNECT_TIMEOUT; /* seconds */
 static int mpirun_connect_backoff  = MPIRUN_CONNECT_BACKOFF; /* seconds */
 static int mpirun_connect_random   = MPIRUN_CONNECT_RANDOM;
 
-static int mpirun_use_pmi = 0;
+/* set envvar MPIRUN_USE_TREES={0,1} to disable/enable tree algorithms */
+static int mpirun_use_trees       = MPIRUN_USE_TREES;
 
-static char* mpirun_hostname;
-static int   mpirun_port;
-static int   mpirun_socket = -1;
+/* whether to use PMI library to bootstrap */
+static int mpirun_use_pmi = MPIRUN_USE_PMI;
+
 static int   pmgr_nprocs = -1;
 static int   pmgr_id     = -1;
 
+/* track whether we are in between pmgr_open and pmgr_close */
+static int   pmgr_is_open = 0;
+
+/* records details on server process to bootstrap */
+static char* mpirun_hostname;
+static int   mpirun_port;
+static int   mpirun_socket = -1;
+
 /* tree data structures */
+static int  pmgr_tree_is_open = 0;
 static int  pmgr_parent;         /* MPI rank of parent */
 static int  pmgr_parent_s = -1;  /* socket fd to parent */
 static int* pmgr_child;          /* MPI ranks of children */
@@ -120,7 +119,8 @@ static struct in_addr* pmgr_child_ip;   /* IP addresses of children */
 static short*          pmgr_child_port; /* port number of children */
 
 /* startup time, time between starting pmgr_open and finishing pmgr_close */
-static struct timeval time_open, time_close;
+static struct timeval time_open;
+static struct timeval time_close;
 
 static unsigned pmgr_backoff_rand_seed;
 
@@ -131,7 +131,7 @@ static unsigned pmgr_backoff_rand_seed;
  */
 
 /* read size bytes into buf from mpirun_socket */
-static int pmgr_read(void* buf, int size)
+static int mpirun_read(void* buf, int size)
 {
     int rc = 0;
     if ((rc = pmgr_read_fd(mpirun_socket, buf, size)) < 0) {
@@ -143,7 +143,7 @@ static int pmgr_read(void* buf, int size)
 }
 
 /* write size bytes into mpirun_socket from buf */
-static int pmgr_write(void* buf, int size)
+static int mpirun_write(void* buf, int size)
 {
     int rc = 0;
     if ((rc = pmgr_write_fd(mpirun_socket, buf, size)) < 0) {
@@ -155,9 +155,9 @@ static int pmgr_write(void* buf, int size)
 }
 
 /* write integer into mpirun_socket */
-static int pmgr_write_int(int value)
+static int mpirun_write_int(int value)
 {
-    return pmgr_write(&value, sizeof(value));
+    return mpirun_write(&value, sizeof(value));
 }
 
 /* 
@@ -178,8 +178,8 @@ static int mpirun_barrier()
     int buf;
 
     if(mpirun_socket >= 0) {
-        pmgr_write_int(PMGR_BARRIER);
-        pmgr_read(&buf, sizeof(int));
+        mpirun_write_int(PMGR_BARRIER);
+        mpirun_read(&buf, sizeof(int));
     } else {
         pmgr_error("Barrier failed since socket to mpirun is not open @ %s:%d",
             __FILE__,__LINE__
@@ -198,17 +198,17 @@ static int mpirun_bcast(void* buf, int sendcount, int root)
 {
     if(mpirun_socket >= 0) {
         /* send BCAST op code, then root, then size of data */
-        pmgr_write_int(PMGR_BCAST);
-        pmgr_write_int(root);
-        pmgr_write_int(sendcount);
+        mpirun_write_int(PMGR_BCAST);
+        mpirun_write_int(root);
+        mpirun_write_int(sendcount);
 
         /* if i am root, send data */
         if (pmgr_me == root) {
-            pmgr_write(buf, sendcount);
+            mpirun_write(buf, sendcount);
         }
 
         /* read in data */
-        pmgr_read(buf, sendcount);
+        mpirun_read(buf, sendcount);
     } else {
         pmgr_error("Bcast failed since socket to mpirun is not open @ %s:%d",
             __FILE__,__LINE__
@@ -227,14 +227,14 @@ static int mpirun_gather(void* sendbuf, int sendcount, void* recvbuf, int root)
 {
     if(mpirun_socket >= 0) {
         /* send GATHER op code, then root, then size of data, then data itself */
-        pmgr_write_int(PMGR_GATHER);
-        pmgr_write_int(root);
-        pmgr_write_int(sendcount);
-        pmgr_write(sendbuf, sendcount);
+        mpirun_write_int(PMGR_GATHER);
+        mpirun_write_int(root);
+        mpirun_write_int(sendcount);
+        mpirun_write(sendbuf, sendcount);
 
         /* only the root receives data */
         if (pmgr_me == root) {
-           pmgr_read(recvbuf, sendcount * pmgr_nprocs);
+           mpirun_read(recvbuf, sendcount * pmgr_nprocs);
         }
     } else {
         pmgr_error("Gather failed since socket to mpirun is not open @ %s:%d",
@@ -254,17 +254,17 @@ static int mpirun_scatter(void* sendbuf, int sendcount, void* recvbuf, int root)
 {
     if(mpirun_socket >= 0) {
         /* send SCATTER op code, then root, then size of data, then data itself */
-        pmgr_write_int(PMGR_SCATTER);
-        pmgr_write_int(root);
-        pmgr_write_int(sendcount);
+        mpirun_write_int(PMGR_SCATTER);
+        mpirun_write_int(root);
+        mpirun_write_int(sendcount);
 
         /* if i am root, send all chunks to mpirun */
         if (pmgr_me == root) {
-            pmgr_write(sendbuf, sendcount * pmgr_nprocs);
+            mpirun_write(sendbuf, sendcount * pmgr_nprocs);
         }
 
         /* receive my chunk */
-        pmgr_read(recvbuf, sendcount);
+        mpirun_read(recvbuf, sendcount);
     } else {
         pmgr_error("Scatter failed since socket to mpirun is not open @ %s:%d",
             __FILE__,__LINE__
@@ -283,10 +283,10 @@ static int mpirun_allgather(void* sendbuf, int sendcount, void* recvbuf)
 {
     if(mpirun_socket >= 0) {
         /* send ALLGATHER op code, then size of data, then data itself */
-        pmgr_write_int(PMGR_ALLGATHER);
-        pmgr_write_int(sendcount);
-        pmgr_write(sendbuf, sendcount);
-        pmgr_read (recvbuf, sendcount * pmgr_nprocs);
+        mpirun_write_int(PMGR_ALLGATHER);
+        mpirun_write_int(sendcount);
+        mpirun_write(sendbuf, sendcount);
+        mpirun_read(recvbuf, sendcount * pmgr_nprocs);
     } else {
         pmgr_error("Allgather failed since socket to mpirun is not open @ %s:%d",
             __FILE__,__LINE__
@@ -305,10 +305,10 @@ static int mpirun_alltoall(void* sendbuf, int sendcount, void* recvbuf)
 {
     if(mpirun_socket >= 0) {
         /* send ALLTOALL op code, then size of data, then data itself */
-        pmgr_write_int(PMGR_ALLTOALL);
-        pmgr_write_int(sendcount);
-        pmgr_write(sendbuf, sendcount * pmgr_nprocs);
-        pmgr_read (recvbuf, sendcount * pmgr_nprocs);
+        mpirun_write_int(PMGR_ALLTOALL);
+        mpirun_write_int(sendcount);
+        mpirun_write(sendbuf, sendcount * pmgr_nprocs);
+        mpirun_read(recvbuf, sendcount * pmgr_nprocs);
     } else {
         pmgr_error("Alltoall failed since socket to mpirun is not open @ %s:%d",
             __FILE__,__LINE__
@@ -481,6 +481,9 @@ static int pmgr_close_tree()
     pmgr_free(pmgr_child_ip);
     pmgr_free(pmgr_child_port);
 
+    /* mark the tree as being closed */
+    pmgr_tree_is_open = 0;
+
     return PMGR_SUCCESS;
 }
 
@@ -524,7 +527,7 @@ static int pmgr_abort_tree()
 
     if (mpirun_socket >= 0) {
         /* send CLOSE op code to mpirun, then close socket */
-        pmgr_write_int(PMGR_CLOSE);
+        mpirun_write_int(PMGR_CLOSE);
         close(mpirun_socket);
         mpirun_socket = -1;
     }
@@ -984,10 +987,20 @@ static int pmgr_open_tree()
         }
     }
 
+    /* free off the ip:port table */
+    pmgr_free(recvbuf);
+
+    /* close our listening socket */
+    if (sockfd >= 0) {
+        close(sockfd);
+        sockfd = -1;
+    }
+
+    /* mark the tree as being open */
+    pmgr_tree_is_open = 1;
+
     /* check whether everyone succeeded in connecting */
     pmgr_check_tree(rc == PMGR_SUCCESS);
-
-    pmgr_free(recvbuf);
 
     return rc;
 }
@@ -1248,9 +1261,17 @@ int pmgr_barrier()
 
     int rc = PMGR_SUCCESS;
 
+    /* bail out if we're not open */
+    if (!pmgr_is_open) {
+        pmgr_error("Must call pmgr_open() before pmgr_barrier() @ file %s:%d",
+            __FILE__, __LINE__
+        );
+        return !PMGR_SUCCESS;
+    }
+
     /* check whether we have an mpirun process */
     if (pmgr_nprocs > 1) {
-        if (mpirun_use_trees) {
+        if (pmgr_tree_is_open) {
             /* just issue a check tree using success */
             rc = pmgr_check_tree(1);
         } else {
@@ -1277,11 +1298,19 @@ int pmgr_bcast(void* buf, int sendcount, int root)
 
     int rc = PMGR_SUCCESS;
 
+    /* bail out if we're not open */
+    if (!pmgr_is_open) {
+        pmgr_error("Must call pmgr_open() before pmgr_bcast() @ file %s:%d",
+            __FILE__, __LINE__
+        );
+        return !PMGR_SUCCESS;
+    }
+
     /* check whether we have an mpirun process */
     if (pmgr_nprocs > 1) {
         /* if root is rank 0 and bcast tree is enabled, use it */
         /* (this is a common case) */
-        if (root == 0 && mpirun_use_trees && mpirun_use_bcast_tree) {
+        if (root == 0 && pmgr_tree_is_open) {
             rc = pmgr_bcast_tree(buf, sendcount);
         } else {
             rc = mpirun_bcast(buf, sendcount, root);
@@ -1306,11 +1335,19 @@ int pmgr_gather(void* sendbuf, int sendcount, void* recvbuf, int root)
 
     int rc = PMGR_SUCCESS;
 
+    /* bail out if we're not open */
+    if (!pmgr_is_open) {
+        pmgr_error("Must call pmgr_open() before pmgr_gather() @ file %s:%d",
+            __FILE__, __LINE__
+        );
+        return !PMGR_SUCCESS;
+    }
+
     /* check whether we have an mpirun process */
     if (pmgr_nprocs > 1) {
         /* if root is rank 0 and gather tree is enabled, use it */
         /* (this is a common case) */
-        if (root == 0 && mpirun_use_trees && mpirun_use_gather_tree) {
+        if (root == 0 && pmgr_tree_is_open) {
             rc = pmgr_gather_tree(sendbuf, sendcount, recvbuf);
         } else {
             rc = mpirun_gather(sendbuf, sendcount, recvbuf, root);
@@ -1337,11 +1374,19 @@ int pmgr_scatter(void* sendbuf, int sendcount, void* recvbuf, int root)
 
     int rc = PMGR_SUCCESS;
 
+    /* bail out if we're not open */
+    if (!pmgr_is_open) {
+        pmgr_error("Must call pmgr_open() before pmgr_scatter() @ file %s:%d",
+            __FILE__, __LINE__
+        );
+        return !PMGR_SUCCESS;
+    }
+
     /* check whether we have an mpirun process */
     if (pmgr_nprocs > 1) {
         /* if root is rank 0 and gather tree is enabled, use it */
         /* (this is a common case) */
-        if (root == 0 && mpirun_use_trees && mpirun_use_scatter_tree) {
+        if (root == 0 && pmgr_tree_is_open) {
             rc = pmgr_scatter_tree(sendbuf, sendcount, recvbuf);
         } else {
             rc = mpirun_scatter(sendbuf, sendcount, recvbuf, root);
@@ -1368,26 +1413,26 @@ int pmgr_allgather(void* sendbuf, int sendcount, void* recvbuf)
 
     int rc = PMGR_SUCCESS;
 
+    /* bail out if we're not open */
+    if (!pmgr_is_open) {
+        pmgr_error("Must call pmgr_open() before pmgr_allgather() @ file %s:%d",
+            __FILE__, __LINE__
+        );
+        return !PMGR_SUCCESS;
+    }
+
     /* check whether we have an mpirun process */
     if (pmgr_nprocs > 1) {
-        if (mpirun_use_trees) {
+        if (pmgr_tree_is_open) {
             /* gather data to rank 0 */
             int tmp_rc;
-            if (mpirun_use_gather_tree) {
-                tmp_rc = pmgr_gather_tree(sendbuf, sendcount, recvbuf);
-            } else {
-                tmp_rc = mpirun_gather(sendbuf, sendcount, recvbuf, 0);
-            }
+            tmp_rc = pmgr_gather_tree(sendbuf, sendcount, recvbuf);
             if (tmp_rc != PMGR_SUCCESS) {
               rc = tmp_rc;
             }
 
             /* broadcast data from rank 0 */
-            if (mpirun_use_bcast_tree) {
-                tmp_rc = pmgr_bcast_tree(recvbuf, sendcount * pmgr_nprocs);
-            } else {
-                tmp_rc = mpirun_bcast(recvbuf, sendcount * pmgr_nprocs, 0);
-            }
+            tmp_rc = pmgr_bcast_tree(recvbuf, sendcount * pmgr_nprocs);
             if (tmp_rc != PMGR_SUCCESS) {
               rc = tmp_rc;
             }
@@ -1417,9 +1462,17 @@ int pmgr_alltoall(void* sendbuf, int sendcount, void* recvbuf)
 
     int rc = PMGR_SUCCESS;
 
+    /* bail out if we're not open */
+    if (!pmgr_is_open) {
+        pmgr_error("Must call pmgr_open() before pmgr_alltoall() @ file %s:%d",
+            __FILE__, __LINE__
+        );
+        return !PMGR_SUCCESS;
+    }
+
     /* check whether we have an mpirun process */
     if (pmgr_nprocs > 1) {
-        if (mpirun_use_gather_tree && mpirun_use_scatter_tree) {
+        if (pmgr_tree_is_open) {
             rc = pmgr_alltoall_tree(sendbuf, sendcount, recvbuf);
         } else {
             rc = mpirun_alltoall(sendbuf, sendcount, recvbuf);
@@ -1445,9 +1498,17 @@ int pmgr_allreducemaxint(int* sendint, int* recvint)
 
     int rc = PMGR_SUCCESS;
 
+    /* bail out if we're not open */
+    if (!pmgr_is_open) {
+        pmgr_error("Must call pmgr_open() before pmgr_allreducemaxint() @ file %s:%d",
+            __FILE__, __LINE__
+        );
+        return !PMGR_SUCCESS;
+    }
+
     /* reduce the maximum integer to rank 0 and store in max */
     int max;
-    if (mpirun_use_trees) {
+    if (pmgr_tree_is_open) {
         /* use the tree to do our reduction */
         rc = pmgr_reducemaxint_tree(sendint, &max);
         if (rc != PMGR_SUCCESS) {
@@ -1517,6 +1578,14 @@ int pmgr_allgatherstr(char* sendstr, char*** recvstr, char** recvbuf)
     pmgr_debug(3, "Starting pmgr_allgatherstr()");
 
     int rc = PMGR_SUCCESS;
+
+    /* bail out if we're not open */
+    if (!pmgr_is_open) {
+        pmgr_error("Must call pmgr_open() before pmgr_allgatherstr() @ file %s:%d",
+            __FILE__, __LINE__
+        );
+        return !PMGR_SUCCESS;
+    }
 
     /* determine max length of send strings */
     int mylen  = strlen(sendstr) + 1;
@@ -1598,8 +1667,8 @@ int pmgr_open()
              */
 
             /* send version number, then rank */
-            pmgr_write_int(PMGR_COLLECTIVE);
-            pmgr_write(&pmgr_me, sizeof(pmgr_me));
+            mpirun_write_int(PMGR_COLLECTIVE);
+            mpirun_write(&pmgr_me, sizeof(pmgr_me));
         }
 
         /* open up socket tree, if enabled */
@@ -1608,6 +1677,9 @@ int pmgr_open()
         }
     }
     /* just a single process, we don't need to open a connection here */
+
+    /* mark our state as opened */
+    pmgr_is_open = 1;
 
     pmgr_gettimeofday(&end);
     pmgr_debug(2, "Exiting pmgr_open(), took %f seconds for %d procs", pmgr_getsecs(&end,&start), pmgr_nprocs);
@@ -1625,8 +1697,8 @@ int pmgr_close()
 
     /* check whether we have an mpirun process */
     if (pmgr_nprocs > 1) {
-        /* shut down the tree, if enabled */
-        if (mpirun_use_trees) {
+        /* shut down the tree, if it's open */
+        if (pmgr_tree_is_open) {
             /* issue a barrier before closing tree to check that everyone makes it here */
             pmgr_check_tree(1);
             pmgr_close_tree();
@@ -1634,12 +1706,15 @@ int pmgr_close()
 
         if (mpirun_socket >= 0) {
             /* send CLOSE op code, then close socket */
-            pmgr_write_int(PMGR_CLOSE);
+            mpirun_write_int(PMGR_CLOSE);
             close(mpirun_socket);
             mpirun_socket = -1;
         }
     }
     /* just a single process, there is nothing to close */
+
+    /* switch our state to closed */
+    pmgr_is_open = 0;
 
     pmgr_gettimeofday(&end);
     pmgr_gettimeofday(&time_close);
@@ -1707,26 +1782,6 @@ int pmgr_init(int *argc_p, char ***argv_p, int *np_p, int *me_p, int *id_p)
         mpirun_port = atoi(pmgr_getenv("MPIRUN_PORT", ENV_REQUIRED));
     }
 
-    /* MPIRUN_USE_TREES={0,1} disables/enables tree algorithms */
-    if ((value = pmgr_getenv("MPIRUN_USE_TREES", ENV_OPTIONAL))) {
-        mpirun_use_trees = atoi(value);
-    }
-
-    /* MPIRUN_USE_GATHER_TREE={0,1} disables/enables gather tree */
-    if ((value = pmgr_getenv("MPIRUN_USE_GATHER_TREE", ENV_OPTIONAL))) {
-        mpirun_use_gather_tree = atoi(value);
-    }
-
-    /* MPIRUN_USE_SCATTER_TREE={0,1} disables/enables scatter tree */
-    if ((value = pmgr_getenv("MPIRUN_USE_SCATTER_TREE", ENV_OPTIONAL))) {
-        mpirun_use_scatter_tree = atoi(value);
-    }
-
-    /* MPIRUN_USE_BCAST_TREE={0,1} disables/enables bcast tree */
-    if ((value = pmgr_getenv("MPIRUN_USE_BCAST_TREE", ENV_OPTIONAL))) {
-        mpirun_use_bcast_tree = atoi(value);
-    }
-
     if ((value = pmgr_getenv("MPIRUN_CONNECT_TRIES", ENV_OPTIONAL))) {
         mpirun_connect_tries = atoi(value);
     }
@@ -1744,6 +1799,11 @@ int pmgr_init(int *argc_p, char ***argv_p, int *np_p, int *me_p, int *id_p)
     /* enable/disable radomized option in backoff */
     if ((value = pmgr_getenv("MPIRUN_CONNECT_RANDOM", ENV_OPTIONAL))) {
         mpirun_connect_random = atoi(value);
+    }
+
+    /* MPIRUN_USE_TREES={0,1} disables/enables tree algorithms */
+    if ((value = pmgr_getenv("MPIRUN_USE_TREES", ENV_OPTIONAL))) {
+        mpirun_use_trees = atoi(value);
     }
 
     /* use pmi instead of socket connections to mpirun */
@@ -1830,13 +1890,11 @@ int pmgr_init(int *argc_p, char ***argv_p, int *np_p, int *me_p, int *id_p)
     }
     pmgr_debug(3, "In pmgr_init():\n" \
         "  MPIRUN_RANK: %d, MPIRUN_NPROCS: %d, MPIRUN_ID: %d, MPIRUN_HOST: %s, MPIRUN_PORT: %d\n" \
-        "  MPIRUN_USE_TREES: %d, MPIRUN_USE_GATHER_TREE: %d, MPIRUN_USE_SCATTER_TREE: %d, MPIRUN_USE_BCAST_TREE: %d\n" \
-        "  MPIRUN_CONNECT_TRIES: %d, MPIRUN_CONNECT_TIMEOUT: %d, MPIRUN_CONNECT_BACKOFF: %d, MPIRUN_CONNECT_RANDOM: %d" \
-        "  MPIRUN_USE_PMI: %d",
+        "  MPIRUN_CONNECT_TRIES: %d, MPIRUN_CONNECT_TIMEOUT: %d, MPIRUN_CONNECT_BACKOFF: %d, MPIRUN_CONNECT_RANDOM: %d\n" \
+        "  MPIRUN_USE_TREES: %d, MPIRUN_USE_PMI: %d",
         pmgr_me, pmgr_nprocs, pmgr_id, mpirun_hostname, mpirun_port,
-        mpirun_use_trees, mpirun_use_gather_tree, mpirun_use_scatter_tree, mpirun_use_bcast_tree,
         mpirun_connect_tries, mpirun_connect_timeout, mpirun_connect_backoff, mpirun_connect_random,
-        mpirun_use_pmi
+        mpirun_use_trees, mpirun_use_pmi
     );
 
     /* check that we have a valid number of processes */
@@ -1927,8 +1985,8 @@ int pmgr_abort(int code, const char *fmt, ...)
     char buf [256];
     int len;
 
-    /* if we're using trees, send abort messages to parent and children */
-    if (mpirun_use_trees) {
+    /* if the tree is open, send out abort messages to parent and children */
+    if (pmgr_tree_is_open) {
         pmgr_abort_tree();
     }
 

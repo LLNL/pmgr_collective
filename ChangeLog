@@ -1,3 +1,10 @@
+2010-08-20 Adam Moody <moody20@llnl.gov>
+
+	* README.txt : Added text about PMI support.
+
+	* src/pmgr_collective_client.c : Fixed bug to prevent operations on tree when
+	  it is not open.  Close listening socket after parent connects.
+
 2010-08-18 Adam Moody <moody20@llnl.gov>
 
 	* makefile,
