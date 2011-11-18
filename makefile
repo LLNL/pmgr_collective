@@ -6,11 +6,29 @@ all: clean
 	mkdir include
 	cd src && \
 	  gcc $(OPT) -fPIC -Wall -c -o pmgr_collective_common.o pmgr_collective_common.c && \
+	  gcc $(OPT) -fPIC -Wall -c -o pmgr_collective_ranges.o pmgr_collective_ranges.c && \
+	  gcc $(OPT) -fPIC -Wall -c -o pmgr_collective_client_mpirun.o pmgr_collective_client_mpirun.c && \
+	  gcc $(OPT) -fPIC -Wall -c -o pmgr_collective_client_slurm.o  pmgr_collective_client_slurm.c && \
+	  gcc $(OPT) -fPIC -Wall -c -o pmgr_collective_client_tree.o   pmgr_collective_client_tree.c -DHAVE_PMI -I/usr/include/slurm && \
 	  gcc $(OPT) -fPIC -Wall -c -o pmgr_collective_client.o pmgr_collective_client.c -DHAVE_PMI -I/usr/include/slurm && \
 	  gcc $(OPT) -fPIC -Wall -c -o pmgr_collective_mpirun.o pmgr_collective_mpirun.c && \
-	  ar rcs libpmgr_collective.a pmgr_collective_common.o pmgr_collective_client.o pmgr_collective_mpirun.o && \
+	  ar rcs libpmgr_collective.a \
+		pmgr_collective_common.o \
+		pmgr_collective_ranges.o \
+		pmgr_collective_client_mpirun.o \
+		pmgr_collective_client_tree.o \
+		pmgr_collective_client_slurm.o \
+		pmgr_collective_client.o \
+		pmgr_collective_mpirun.o && \
 	  gcc $(OPT) -fPIC -shared -Wl,-soname,libpmgr_collective.so.1 -o libpmgr_collective.so.1.0.1 \
-		pmgr_collective_common.o pmgr_collective_client.o pmgr_collective_mpirun.o -lpmi && \
+		pmgr_collective_common.o \
+		pmgr_collective_ranges.o \
+		pmgr_collective_client_mpirun.o \
+		pmgr_collective_client_tree.o \
+		pmgr_collective_client_slurm.o \
+		pmgr_collective_client.o \
+		pmgr_collective_mpirun.o \
+		-lpmi && \
 	  mv libpmgr_collective.a        ../lib/. && \
 	  mv libpmgr_collective.so.1.0.1 ../lib/. && \
 	  ln -s libpmgr_collective.so.1.0.1 ../lib/libpmgr_collective.so.1 && \

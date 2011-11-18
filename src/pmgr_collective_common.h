@@ -27,6 +27,11 @@
 #ifndef _PMGR_COLLECTIVE_COMMON_H
 #define _PMGR_COLLECTIVE_COMMON_H
 
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
 #if defined(_IA64_)
 #undef htons
 #undef ntohs
@@ -38,6 +43,7 @@
 #define PMGR_COLLECTIVE 8
 
 #define PMGR_SUCCESS 0
+#define PMGR_FAILURE (!PMGR_SUCCESS)
 
 #define PMGR_OPEN      0
 #define PMGR_CLOSE     1
@@ -84,9 +90,46 @@ void pmgr_error(char *fmt, ...);
 void pmgr_debug(int leve, char *fmt, ...);
 
 /* write size bytes from buf into fd, retry if necessary */
-int pmgr_write_fd(int fd, void* buf, int size);
+int pmgr_write_fd_suppress(int fd, const void* buf, int size, int suppress);
+
+/* write size bytes from buf into fd, retry if necessary */
+int pmgr_write_fd(int fd, const void* buf, int size);
+
+/* read size bytes into buf from fd, retry if necessary */
+int pmgr_read_fd_timeout(int fd, void* buf, int size, int usecs);
+
+/* read size bytes into buf from fd, retry if necessary */
+int pmgr_read_fd(int fd, void* buf, int size);
 
 /* read size bytes into buf from fd, retry if necessary */
 int pmgr_read_fd (int fd, void* buf, int size);
+
+/* Open a connection on socket FD to peer at ADDR (which LEN bytes long).
+ * This function uses a non-blocking filedescriptor for the connect(),
+ * and then does a bounded poll() for the connection to complete.  This
+ * allows us to timeout the connect() earlier than TCP might do it on
+ * its own.  We have seen timeouts that failed after several minutes,
+ * where we would really prefer to time out earlier and retry the connect.
+ *
+ * Return 0 on success, -1 for errors.
+ */
+int pmgr_connect_timeout_suppress(int fd, struct sockaddr_in* addr, int millisec, int suppress);
+
+/* Connect to given IP:port.  Upon successful connection, pmgr_connect
+ * shall return the connected socket file descriptor.  Otherwise, -1 shall be
+ * returned.
+ */
+int pmgr_connect(struct in_addr ip, int port);
+
+/* open a listening socket and return the descriptor, the ip address, and the port */
+int pmgr_open_listening_socket(int* out_fd, struct in_addr* out_ip, short* out_port);
+
+int pmgr_authenticate_accept(int fd, const char* connect_text, size_t connect_len, const char* accept_text, size_t accept_len, int reply_timeout);
+
+/* issues a handshake across connection to verify we really connected to the right socket */
+int pmgr_authenticate_connect(int fd, int rank, const char* hostname, int port, const char* connect_text, size_t connect_len, const char* accept_text, size_t accept_len, int reply_timeout);
+
+/* Attempts to connect to a given hostname using a port list and timeouts */
+int pmgr_connect_hostname(int rank, const char* hostname, const char* ports, const char* connect_text, size_t connect_len, const char* accept_text, size_t accept_len);
 
 #endif /* _PMGR_COLLECTIVE_COMMON_H */
