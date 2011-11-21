@@ -58,6 +58,10 @@ int pmgr_tree_init_null(pmgr_tree_t* t);
  * fills in our position within the tree and allocates memory to hold socket info */
 int pmgr_tree_init_binomial(pmgr_tree_t* t, int ranks, int rank);
 
+/* given number of ranks and our rank with the group, create a binary tree
+ * fills in our position within the tree and allocates memory to hold socket info */
+int pmgr_tree_init_binary(pmgr_tree_t* t, int ranks, int rank);
+
 /* free all memory allocated in tree */
 int pmgr_tree_free(pmgr_tree_t* t);
 
@@ -86,6 +90,9 @@ int pmgr_tree_open(pmgr_tree_t* t, int ranks, int rank);
 /* given a table of ranks number of ip:port entries, open the tree */
 int pmgr_tree_open_table(pmgr_tree_t* t, int ranks, int rank, const void* table, int sockfd);
 
+/* given a table of ranks number of ip:port entries, open a tree */
+int pmgr_tree_open_nodelist_scan(pmgr_tree_t* t, const char* nodelist, const char* portrange, int sockfd);
+
 /*
  * =============================
  * Colletive implementations over tree
@@ -103,6 +110,10 @@ int pmgr_tree_scatter(pmgr_tree_t* t, void* sendbuf, int sendcount, void* recvbu
 
 /* computes maximum integer across all processes and saves it to recvbuf on rank 0 */
 int pmgr_tree_reducemaxint(pmgr_tree_t* t, int* sendint, int* recvint);
+
+/* collects all data from all tasks into recvbuf which is at most max_recvcount bytes big,
+ * effectively works like a gatherdv */
+int pmgr_tree_aggregate(pmgr_tree_t*, const void* sendbuf, int sendcount, void* recvbuf, int max_recvcount, int* out_count);
 
 /* alltoall sendcount bytes from each process to each process via tree */
 int pmgr_tree_alltoall(pmgr_tree_t* t, void* sendbuf, int sendcount, void* recvbuf);

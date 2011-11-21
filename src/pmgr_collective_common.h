@@ -115,6 +115,9 @@ int pmgr_read_fd (int fd, void* buf, int size);
  */
 int pmgr_connect_timeout_suppress(int fd, struct sockaddr_in* addr, int millisec, int suppress);
 
+/* Make multiple attempts to connect to given IP:port sleeping for a certain period in between attempts. */
+int pmgr_connect_retry(struct in_addr ip, int port, int timeout_millisec, int attempts, int sleep_usecs, int suppress);
+
 /* Connect to given IP:port.  Upon successful connection, pmgr_connect
  * shall return the connected socket file descriptor.  Otherwise, -1 shall be
  * returned.
@@ -122,14 +125,17 @@ int pmgr_connect_timeout_suppress(int fd, struct sockaddr_in* addr, int millisec
 int pmgr_connect(struct in_addr ip, int port);
 
 /* open a listening socket and return the descriptor, the ip address, and the port */
-int pmgr_open_listening_socket(int* out_fd, struct in_addr* out_ip, short* out_port);
+int pmgr_open_listening_socket(const char* portrange, int* out_fd, struct in_addr* out_ip, short* out_port);
 
 int pmgr_authenticate_accept(int fd, const char* connect_text, size_t connect_len, const char* accept_text, size_t accept_len, int reply_timeout);
 
 /* issues a handshake across connection to verify we really connected to the right socket */
-int pmgr_authenticate_connect(int fd, int rank, const char* hostname, int port, const char* connect_text, size_t connect_len, const char* accept_text, size_t accept_len, int reply_timeout);
+int pmgr_authenticate_connect(int fd, const char* connect_text, size_t connect_len, const char* accept_text, size_t accept_len, int reply_timeout);
 
 /* Attempts to connect to a given hostname using a port list and timeouts */
-int pmgr_connect_hostname(int rank, const char* hostname, const char* ports, const char* connect_text, size_t connect_len, const char* accept_text, size_t accept_len);
+int pmgr_connect_hostname(
+    int rank, const char* hostname, const char* portrange, struct in_addr* ip, short* port,
+    const char* connect_text, size_t connect_len, const char* accept_text, size_t accept_len
+);
 
 #endif /* _PMGR_COLLECTIVE_COMMON_H */

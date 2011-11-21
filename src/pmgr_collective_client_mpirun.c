@@ -103,12 +103,11 @@ int pmgr_mpirun_open(int ranks, int rank)
             exit(1);
         }
 
-        mpirun_socket = pmgr_connect(*(struct in_addr *) (*mpirun_hostent->h_addr_list),
-                                     htons(mpirun_port));
+        struct in_addr ip = *(struct in_addr *) *(mpirun_hostent->h_addr_list);
+        mpirun_socket = pmgr_connect(ip, mpirun_port);
         if (mpirun_socket == -1) {
             pmgr_error("Connecting mpirun socket to %s at %s:%d failed @ file %s:%d",
-                mpirun_hostent->h_name, inet_ntoa(*(struct in_addr *) (*mpirun_hostent->h_addr_list)),
-                mpirun_port, __FILE__, __LINE__
+                mpirun_hostent->h_name, inet_ntoa(ip), mpirun_port, __FILE__, __LINE__
             );
             exit(1);
         }

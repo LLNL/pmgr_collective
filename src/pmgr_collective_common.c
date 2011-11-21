@@ -311,7 +311,7 @@ int pmgr_connect_timeout_suppress(int fd, struct sockaddr_in* addr, int millisec
     int rc = connect(fd, (struct sockaddr *) addr, sizeof(struct sockaddr_in));
     if (rc < 0 && errno != EINPROGRESS) {
         pmgr_debug(suppress, "Nonblocking connect failed immediately connecting to %s:%d (connect() %m errno=%d) @ file %s:%d",
-            inet_ntoa(addr->sin_addr), htons(addr->sin_port), errno, __FILE__, __LINE__
+            inet_ntoa(addr->sin_addr), ntohs(addr->sin_port), errno, __FILE__, __LINE__
         );
         return -1;
     }
@@ -332,7 +332,7 @@ again:	rc = poll(&ufds, 1, millisec);
             goto again;
         } else {
             pmgr_debug(suppress, "Failed to poll connection connecting to %s:%d (poll() %m errno=%d) @ file %s:%d",
-                inet_ntoa(addr->sin_addr), htons(addr->sin_port), errno, __FILE__, __LINE__
+                inet_ntoa(addr->sin_addr), ntohs(addr->sin_port), errno, __FILE__, __LINE__
             );
         }
         return -1;
@@ -348,7 +348,7 @@ again:	rc = poll(&ufds, 1, millisec);
         socklen_t err_len = (socklen_t) sizeof(err);
         if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &err_len) < 0) {
             pmgr_debug(suppress, "Failed to read event on socket connecting to %s:%d (getsockopt() %m errno=%d) @ file %s:%d",
-                inet_ntoa(addr->sin_addr), htons(addr->sin_port), errno, __FILE__, __LINE__
+                inet_ntoa(addr->sin_addr), ntohs(addr->sin_port), errno, __FILE__, __LINE__
             );
             return -1; /* solaris pending error */
         }
@@ -362,7 +362,7 @@ done:
      * with terminated launcher. */
     if (err) {
         pmgr_debug(suppress, "Error on socket in pmgr_connect_w_timeout() connecting to %s:%d (getsockopt() set err=%d) @ file %s:%d",
-            inet_ntoa(addr->sin_addr), htons(addr->sin_port), err, __FILE__, __LINE__
+            inet_ntoa(addr->sin_addr), ntohs(addr->sin_port), err, __FILE__, __LINE__
         );
         return -1;
     }
@@ -370,24 +370,22 @@ done:
     return 0;
 }
 
-/* Connect to given IP:port.  Upon successful connection, pmgr_connect
- * shall return the connected socket file descriptor.  Otherwise, -1 shall be
- * returned.
- */
-int pmgr_connect(struct in_addr ip, int port)
+/* Make multiple attempts to connect to given IP:port sleeping for a certain period in between attempts. */
+int pmgr_connect_retry(struct in_addr ip, int port, int timeout_millisec, int attempts, int sleep_usecs, int suppress)
 {
     struct sockaddr_in sockaddr;
     int sockfd;
-    int i;
 
     /* set up address to connect to */
     sockaddr.sin_family = AF_INET;
     sockaddr.sin_addr = ip;
-    sockaddr.sin_port = port;
+    sockaddr.sin_port = htons(port);
 
     /* Try making the connection several times, with a random backoff
        between tries. */
-    for (i = 0; ; i++) {
+    int connected = 0;
+    int count = 0;
+    while (!connected && count < attempts) {
         /* create a socket */
         sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         if (sockfd < 0) {
@@ -398,31 +396,42 @@ int pmgr_connect(struct in_addr ip, int port)
         }
 
         /* connect socket to address */
-        if (pmgr_connect_timeout_suppress(sockfd, &sockaddr, mpirun_connect_timeout * 1000, 1) < 0) {
-            if (i >= mpirun_connect_tries) {
-                pmgr_error("Failed to connect to %s:%d @ file %s:%d",
-                    inet_ntoa(ip), htons(port), __FILE__, __LINE__
-                );
+        if (pmgr_connect_timeout_suppress(sockfd, &sockaddr, timeout_millisec, suppress) < 0) {
+            if (attempts > 1) {
                 close(sockfd);
-                return -1;
-            } else {
-                close(sockfd);
-                if (mpirun_connect_random) {
-                    usleep(((rand_r(&pmgr_backoff_rand_seed) % (mpirun_connect_backoff * 1000)) + 1) * 1000);
-                } else {
-                    usleep(mpirun_connect_backoff * 1000 * 1000);
-                }
+                usleep(sleep_usecs);
             }
         } else {
-            break;
+            connected = 1;
         }
+        count++;
+    }
+
+    if (!connected) {
+        pmgr_debug(suppress, "Failed to connect to %s:%d @ file %s:%d",
+            inet_ntoa(ip), port, __FILE__, __LINE__
+        );
+        close(sockfd);
+        return -1;
     }
 
     return sockfd;
 }
 
+/* Connect to given IP:port.  Upon successful connection, pmgr_connect
+ * shall return the connected socket file descriptor.  Otherwise, -1 shall be
+ * returned.
+ */
+int pmgr_connect(struct in_addr ip, int port)
+{
+    int timeout_millisec = mpirun_connect_timeout * 1000;
+    int sleep_usec       = mpirun_connect_backoff * 1000 * 1000;
+    int fd = pmgr_connect_retry(ip, port, timeout_millisec, mpirun_connect_tries, sleep_usec, 1);
+    return fd;
+}
+
 /* open a listening socket and return the descriptor, the ip address, and the port */
-int pmgr_open_listening_socket(int* out_fd, struct in_addr* out_ip, short* out_port)
+int pmgr_open_listening_socket(const char* portrange, int* out_fd, struct in_addr* out_ip, short* out_port)
 {
     /* create a socket to accept connection from parent */
     int sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -433,27 +442,82 @@ int pmgr_open_listening_socket(int* out_fd, struct in_addr* out_ip, short* out_p
         return PMGR_FAILURE;
     }
 
-    /* prepare socket to be bound to ephemeral port - OS will assign us a free port */
     struct sockaddr_in sin;
-    memset(&sin, 0, sizeof(sin));
-    sin.sin_family = AF_INET;
-    sin.sin_addr.s_addr = htonl(INADDR_ANY);
-    sin.sin_port = htons(0); /* bind ephemeral port - OS will assign us a free port */
+    if (portrange == NULL) {
+        /* prepare socket to be bound to ephemeral port - OS will assign us a free port */
+        memset(&sin, 0, sizeof(sin));
+        sin.sin_family = AF_INET;
+        sin.sin_addr.s_addr = htonl(INADDR_ANY);
+        sin.sin_port = htons(0); /* bind ephemeral port - OS will assign us a free port */
 
-    /* bind socket */
-    if (bind(sockfd, (struct sockaddr *) &sin, sizeof(sin)) < 0) {
-        pmgr_error("Binding parent socket (bind() %m errno=%d) @ file %s:%d",
-            errno, __FILE__, __LINE__
-        );
-        return PMGR_FAILURE;
-    }
+        /* bind socket */
+        if (bind(sockfd, (struct sockaddr *) &sin, sizeof(sin)) < 0) {
+            pmgr_error("Binding parent socket (bind() %m errno=%d) @ file %s:%d",
+                errno, __FILE__, __LINE__
+            );
+            return PMGR_FAILURE;
+        }
 
-    /* set the socket to listen for connections */
-    if (listen(sockfd, 1) < 0) {
-        pmgr_error("Setting parent socket to listen (listen() %m errno=%d) @ file %s:%d",
-            errno, __FILE__, __LINE__
-        );
-        return PMGR_FAILURE;
+        /* set the socket to listen for connections */
+        if (listen(sockfd, 1) < 0) {
+            pmgr_error("Setting parent socket to listen (listen() %m errno=%d) @ file %s:%d",
+                errno, __FILE__, __LINE__
+            );
+            return PMGR_FAILURE;
+        }
+    } else {
+        /* compute number of ports in range */
+        int ports;
+        pmgr_range_numbers_size(portrange, &ports);
+
+        int i = 1;
+        int port_is_bound = 0;
+        while (i <= ports && !port_is_bound) {
+            /* pick a port */
+            char port_str[1024];
+            if (pmgr_range_numbers_nth(portrange, i, port_str, sizeof(port_str)) != PMGR_SUCCESS) {
+                pmgr_error("Invalid port range string '%s' @ file %s:%d",
+                    portrange, __FILE__, __LINE__
+                );
+                return PMGR_FAILURE;
+            }
+            int port = atoi(port_str);
+            i++;
+
+            /* set up an address using our selected port */
+            memset(&sin, 0, sizeof(sin));
+            sin.sin_family = AF_INET;
+            sin.sin_addr.s_addr = htonl(INADDR_ANY);
+            sin.sin_port = htons(port);
+
+            /* attempt to bind a socket on this port */
+            if (bind(sockfd, (struct sockaddr *) &sin, sizeof(sin)) < 0) {
+                pmgr_debug(2, "Binding parent socket (bind() %m errno=%d) port=%d @ file %s:%d",
+                    errno, port, __FILE__, __LINE__
+                );
+                continue;
+            }
+
+            /* set the socket to listen for connections */
+            if (listen(sockfd, 1) < 0) {
+                pmgr_debug(2, "Setting parent socket to listen (listen() %m errno=%d) port=%d @ file %s:%d",
+                    errno, port, __FILE__, __LINE__
+                );
+                continue;
+            }
+
+            /* bound and listening on our port */
+            pmgr_debug(3, "Opened socket on port %d", port);
+            port_is_bound = 1;
+        }
+
+        /* print message if we failed to find a port */
+        if (!port_is_bound) {
+            pmgr_error("Failed to bind socket to port in range '%s' @ file %s:%d",
+                portrange, __FILE__, __LINE__
+            );
+            return PMGR_FAILURE;
+        }
     }
 
     /* ask which port the OS assigned our socket to */
@@ -475,12 +539,12 @@ int pmgr_open_listening_socket(int* out_fd, struct in_addr* out_ip, short* out_p
     }
     struct hostent* he = gethostbyname(hn);
     struct in_addr ip = * (struct in_addr *) *(he->h_addr_list);
-    short port = sin.sin_port;
+    short p = ntohs(sin.sin_port);
 
     /* set output parameters */
     *out_fd   = sockfd;
     *out_ip   = ip;
-    *out_port = port;
+    *out_port = p;
 
     return PMGR_SUCCESS;
 }
@@ -586,22 +650,22 @@ int pmgr_authenticate_accept(int fd, const char* connect_text, size_t connect_le
 }
 
 /* issues a handshake across connection to verify we really connected to the right socket */
-int pmgr_authenticate_connect(int fd, int rank, const char* hostname, int port, const char* connect_text, size_t connect_len, const char* accept_text, size_t accept_len, int reply_timeout)
+int pmgr_authenticate_connect(int fd, const char* connect_text, size_t connect_len, const char* accept_text, size_t accept_len, int reply_timeout)
 {
     int test_failed = 0;
 
     /* write pmgr service id */
     if (!test_failed && pmgr_write_fd_suppress(fd, &pmgr_serviceid, sizeof(pmgr_serviceid), 1) < 0) {
-        pmgr_debug(1, "Writing service id to %s on port %d @ file %s:%d",
-            hostname, port, __FILE__, __LINE__
+        pmgr_debug(1, "Failed to write service id @ file %s:%d",
+            __FILE__, __LINE__
         );
         test_failed = 1;
     }
 
     /* write our connect text */
     if (!test_failed && pmgr_write_fd_suppress(fd, connect_text, connect_len, 1) < 0) {
-       pmgr_debug(1, "Writing connect text to %s on port %d @ file %s:%d",
-           hostname, port, __FILE__, __LINE__
+       pmgr_debug(1, "Failed to write connect text @ file %s:%d",
+           __FILE__, __LINE__
        );
        test_failed = 1;
     }
@@ -614,14 +678,17 @@ int pmgr_authenticate_connect(int fd, int rank, const char* hostname, int port, 
     /* read the pmgr service id */
     unsigned int received_serviceid = 0;
     if (!test_failed && pmgr_read_fd_timeout(fd, &received_serviceid, sizeof(received_serviceid), reply_timeout) < 0) {
-        pmgr_debug(1, "Receiving service id from %s on port %d failed @ file %s:%d",
-            hostname, port, __FILE__, __LINE__
+        pmgr_debug(1, "Failed to receive service id @ file %s:%d",
+            __FILE__, __LINE__
         );
         test_failed = 1;
     }
 
     /* check that we got the expected service id */
     if (!test_failed && received_serviceid != pmgr_serviceid) {
+        pmgr_debug(1, "Received invalid service id @ file %s:%d",
+            __FILE__, __LINE__
+        );
         test_failed = 1;
     }
 
@@ -630,15 +697,15 @@ int pmgr_authenticate_connect(int fd, int rank, const char* hostname, int port, 
     if (!test_failed && accept_len > 0) {
         received_accept_text = (char*) malloc(accept_len);
         if (received_accept_text == NULL) {
-            pmgr_debug(1, "Failed to allocate memory to receive accept text from %s on port %d failed @ file %s:%d",
-                hostname, port, __FILE__, __LINE__
+            pmgr_debug(1, "Failed to allocate memory to receive accept text @ file %s:%d",
+                __FILE__, __LINE__
             );
             test_failed = 1;
         }
 
         if (!test_failed && pmgr_read_fd_timeout(fd, received_accept_text, accept_len, reply_timeout) < 0) {
-            pmgr_debug(1, "Receiving accept text from %s on port %d failed @ file %s:%d",
-                hostname, port, __FILE__, __LINE__
+            pmgr_debug(1, "Failed to receive accept text @ file %s:%d",
+                __FILE__, __LINE__
             );
             test_failed = 1;
         }
@@ -649,6 +716,9 @@ int pmgr_authenticate_connect(int fd, int rank, const char* hostname, int port, 
         size_t i = 0;
         for (i = 0 ; i < accept_len; i++) {
             if (received_accept_text[i] != accept_text[i]) {
+                pmgr_debug(1, "Received invalid accept text @ file %s:%d",
+                    __FILE__, __LINE__
+                );
                 test_failed = 1;
                 break;
             }
@@ -658,8 +728,8 @@ int pmgr_authenticate_connect(int fd, int rank, const char* hostname, int port, 
     /* write ack to finalize connection (no need to suppress write errors any longer) */
     unsigned int ack = 1;
     if (!test_failed && pmgr_write_fd(fd, &ack, sizeof(ack)) < 0) {
-        pmgr_debug(1, "Writing ack to finalize connection to rank %d on %s port %d @ file %s:%d",
-            rank, hostname, port, __FILE__, __LINE__
+        pmgr_debug(1, "Failed to write ACK to finalize connection @ file %s:%d",
+            __FILE__, __LINE__
         );
         test_failed = 1;
     }
@@ -683,9 +753,18 @@ int pmgr_authenticate_connect(int fd, int rank, const char* hostname, int port, 
 }
 
 /* Attempts to connect to a given hostname using a port list and timeouts */
-int pmgr_connect_hostname(int rank, const char* hostname, const char* ports, const char* connect_text, size_t connect_len, const char* accept_text, size_t accept_len)
+int pmgr_connect_hostname(
+    int rank, const char* hostname, const char* portrange, struct in_addr* out_ip, short* out_port,
+    const char* connect_text, size_t connect_len, const char* accept_text, size_t accept_len)
 {
     int s = -1;
+
+    double timelimit = 60.0; /* seconds */
+    int reply_timeout = 20*1000; /* usecs */
+    int timeout  = 20; /* millisecs */
+    int attempts = 1;
+    int sleep    = 10*1000; /* usecs */
+    int suppress = 3;
 
     /* lookup host address by name */
     struct hostent* he = gethostbyname(hostname);
@@ -696,40 +775,43 @@ int pmgr_connect_hostname(int rank, const char* hostname, const char* ports, con
         return s;
     }
 
-    /* get number of ports */
-    int ports_count = 0;
-    pmgr_range_numbers_size(ports, &ports_count);
+    /* set ip address */
+    struct in_addr ip = *(struct in_addr *) *(he->h_addr_list);
 
-    char* target_port = strdup(ports);
+    /* get number of ports */
+    int ports = 0;
+    pmgr_range_numbers_size(portrange, &ports);
+
+    /* allocate space to read port value into */
+    char* target_port = strdup(portrange);
     size_t target_port_len = strlen(target_port) + 1;
 
     /* Loop until we make a connection or until our timeout expires. */
+    int port;
     struct timeval start, end;
     pmgr_gettimeofday(&start);
     double secs = 0;
     int connected = 0;
-    int reply_timeout = mpirun_connect_timeout * 10;
-    double mpirun_connect_timelimit = (double) 1000 * reply_timeout;
-    while (!connected && secs < mpirun_connect_timelimit) {
+    while (!connected && secs < timelimit) {
         /* iterate over our ports trying to find a connection */
         int i;
-        for (i = 0; i < ports_count; i++) {
+        for (i = 1; i <= ports; i++) {
             /* get the next port */
-            int port;
-            if (pmgr_range_numbers_nth(ports, i, target_port, target_port_len) == PMGR_SUCCESS) {
+            if (pmgr_range_numbers_nth(portrange, i, target_port, target_port_len) == PMGR_SUCCESS) {
                 port = atoi(target_port);
             } else {
                 continue;
             }
 
             /* attempt to connect to hostname on this port */
-            pmgr_debug(1, "Trying rank %d on port %d on %s", rank, port, hostname);
-            s = pmgr_connect(*(struct in_addr *) (*he->h_addr_list), htons(port));
+            pmgr_debug(3, "Trying rank %d on port %d on %s", rank, port, hostname);
+            s = pmgr_connect_retry(ip, port, timeout, attempts, sleep, suppress);
             if (s != -1) {
                 /* got a connection, let's test it out */
-                pmgr_debug(1, "Connected to rank %d port %d on %s", rank, port, hostname);
+                pmgr_debug(2, "Connected to rank %d port %d on %s", rank, port, hostname);
 
-                if (pmgr_authenticate_connect(s, rank, hostname, port, connect_text, connect_len, accept_text, accept_len, reply_timeout) == PMGR_SUCCESS) {
+                if (pmgr_authenticate_connect(s, connect_text, connect_len, accept_text, accept_len, reply_timeout) == PMGR_SUCCESS)
+                {
                     /* it checks out, we're connected to the right process */
                     connected = 1;
                     break;
@@ -742,30 +824,39 @@ int pmgr_connect_hostname(int rank, const char* hostname, const char* ports, con
 
         /* sleep for some time before we try another port scan */
         if (!connected) {
-            usleep(mpirun_connect_backoff * 1000);
+            //usleep(mpirun_connect_backoff * 1000);
 
             /* maybe we connected ok, but we were too impatient waiting for a reply,
-             * extend the reply timeout for the next attempt */
-            reply_timeout *= 2;
+             * extend the reply timeout for the next round of attempts */
+            //reply_timeout *= 2;
         }
 
         /* compute how many seconds we've spent trying to connect */
         pmgr_gettimeofday(&end);
         secs = pmgr_getsecs(&end, &start);
-        if (secs >= mpirun_connect_timelimit) {
+        if (secs >= timelimit) {
             pmgr_error("Time limit to connect to rank %d on %s expired @ file %s:%d",
                        rank, hostname, __FILE__, __LINE__
             );
         }
     }
 
+    /* free space allocated to hold port value */
+    if (target_port != NULL) {
+        free(target_port);
+        target_port = NULL;
+    }
+
     /* check that we successfully opened a socket */
     if (s == -1) {
         pmgr_error("Connecting socket to %s at %s failed @ file %s:%d",
-                   he->h_name, inet_ntoa(*(struct in_addr *) (*he->h_addr_list)),
+                   he->h_name, inet_ntoa(ip),
                    __FILE__, __LINE__
         );
-        return s;
+    } else {
+        /* inform caller of ip address and port that we're connected to */
+        *out_ip   = ip;
+        *out_port = (short) port;
     }
 
     return s;

@@ -583,7 +583,8 @@ int pmgr_close()
     pmgr_gettimeofday(&time_close);
     pmgr_debug(2, "Exiting pmgr_close(), took %f seconds for %d procs", pmgr_getsecs(&end,&start), pmgr_nprocs);
     pmgr_debug(1, "Total time from pmgr_open() to pmgr_close() took %f seconds for %d procs",
-        pmgr_getsecs(&time_close, &time_open), pmgr_nprocs);
+        pmgr_getsecs(&time_close, &time_open), pmgr_nprocs
+    );
     return PMGR_SUCCESS;
 }
 
