@@ -38,8 +38,9 @@
 #define PMGR_TREE_HEADER_ABORT      (0)
 #define PMGR_TREE_HEADER_COLLECTIVE (1)
 
-extern int mpirun_use_pmi;
-extern int mpirun_use_shm;
+extern int mpirun_pmi_enable;
+extern int mpirun_shm_enable;
+extern int mpirun_shm_threshold;
 
 /* write an abort packet across socket */
 static int pmgr_write_abort(int fd)
@@ -1006,11 +1007,10 @@ int pmgr_tree_open(pmgr_tree_t* t, int ranks, int rank, const char* auth)
 {
     int rc = PMGR_SUCCESS;
 
-    int ranks_threshold = 0;
-    if (mpirun_use_pmi) {
+    if (mpirun_pmi_enable) {
         /* use the process management interface */
         rc = pmgr_tree_open_pmi(t, ranks, rank, auth);
-    } else if (mpirun_use_shm && ranks >= ranks_threshold) {
+    } else if (mpirun_shm_enable && ranks >= mpirun_shm_threshold) {
         /* use SLURM env vars and shared memory */
         rc = pmgr_tree_open_slurm(t, ranks, rank, auth);
     } else {

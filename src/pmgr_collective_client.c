@@ -102,12 +102,15 @@
 #endif
 
 /* whether to invoke PMI library to bootstrap PMGR_COLLECTIVE */
-#ifndef MPIRUN_USE_PMI
-#define MPIRUN_USE_PMI (0)
+#ifndef MPIRUN_PMI_ENABLE
+#define MPIRUN_PMI_ENABLE (0)
 #endif
 
-#ifndef MPIRUN_USE_SHM
-#define MPIRUN_USE_SHM (1)
+#ifndef MPIRUN_SHM_ENABLE
+#define MPIRUN_SHM_ENABLE (1)
+#endif
+#ifndef MPIRUN_SHM_THRESHOLD
+#define MPIRUN_SHM_THRESHOLD (1024)
 #endif
 
 /* total time to get through pmgr_open */
@@ -136,8 +139,9 @@ int mpirun_port_scan_authenticate_timeout = MPIRUN_PORT_SCAN_AUTHENTICATE_TIMEOU
 static int mpirun_use_trees = MPIRUN_USE_TREES;
 
 /* whether to use PMI library to bootstrap */
-int mpirun_use_pmi = MPIRUN_USE_PMI;
-int mpirun_use_shm = MPIRUN_USE_SHM;
+int mpirun_pmi_enable = MPIRUN_PMI_ENABLE;
+int mpirun_shm_enable = MPIRUN_SHM_ENABLE;
+int mpirun_shm_threshold = MPIRUN_SHM_THRESHOLD;
 
 static int   pmgr_nprocs = -1;
 static int   pmgr_id     = -1;
@@ -672,7 +676,7 @@ int pmgr_open()
 
     /* check whether we have an mpirun process */
     if (pmgr_nprocs > 1) {
-        if (!mpirun_use_pmi && !mpirun_use_shm) {
+        if (!mpirun_pmi_enable && !(mpirun_shm_enable && pmgr_nprocs >= mpirun_shm_threshold)) {
             /* open connection back to mpirun process */
             if (pmgr_mpirun_open(pmgr_nprocs, pmgr_me) != PMGR_SUCCESS) {
                 exit(1);
@@ -830,9 +834,9 @@ int pmgr_init(int *argc_p, char ***argv_p, int *np_p, int *me_p, int *id_p)
     }
 
     /* use pmi instead of socket connections to mpirun */
-    if ((value = pmgr_getenv("MPIRUN_USE_PMI", ENV_OPTIONAL))) {
+    if ((value = pmgr_getenv("MPIRUN_PMI_ENABLE", ENV_OPTIONAL))) {
 #ifdef HAVE_PMI
-        mpirun_use_pmi = atoi(value);
+        mpirun_pmi_enable = atoi(value);
 #else /* ifdef HAVE_PMI */
         /* PMI was not compiled in, warn user that we're ignoring this value */
         if (pmgr_me == 0) {
@@ -844,12 +848,16 @@ int pmgr_init(int *argc_p, char ***argv_p, int *np_p, int *me_p, int *id_p)
     }
 
     /* whether to use /dev/shm to start jobs */
-    if ((value = pmgr_getenv("MPIRUN_USE_SHM", ENV_OPTIONAL))) {
-        mpirun_use_shm = atoi(value);
+    if ((value = pmgr_getenv("MPIRUN_SHM_ENABLE", ENV_OPTIONAL))) {
+        mpirun_shm_enable = atoi(value);
+    }
+    /* minimum number of tasks to switch to /dev/shm */
+    if ((value = pmgr_getenv("MPIRUN_SHM_THRESHOLD", ENV_OPTIONAL))) {
+        mpirun_shm_threshold = atoi(value);
     }
 
     /* initialize PMI library if we're using it, and get rank, ranks, and jobid from PMI */
-    if (mpirun_use_pmi) {
+    if (mpirun_pmi_enable) {
 #ifdef HAVE_PMI
         /* initialize the PMI library */
         int spawned = 0;
@@ -957,7 +965,7 @@ int pmgr_init(int *argc_p, char ***argv_p, int *np_p, int *me_p, int *id_p)
 int pmgr_finalize()
 {
     /* shut down the PMI library if we're using it */
-    if (mpirun_use_pmi) {
+    if (mpirun_pmi_enable) {
 #ifdef HAVE_PMI
         if (PMI_Finalize() != PMI_SUCCESS) {
             pmgr_error("Failed to finalize PMI library @ file %s:%d",
@@ -1014,7 +1022,7 @@ int pmgr_abort(int code, const char *fmt, ...)
     va_end(ap);
 
     /* check whether we have an mpirun process */
-    if (mpirun_hostname != NULL && !mpirun_use_pmi) {
+    if (mpirun_hostname != NULL && !mpirun_pmi_enable) {
         he = gethostbyname(mpirun_hostname);
         if (!he) {
             pmgr_error("pmgr_abort: Hostname lookup of mpirun failed (gethostbyname(%s) %s h_errno=%d) @ file %s:%d",
@@ -1057,7 +1065,7 @@ int pmgr_abort(int code, const char *fmt, ...)
         pmgr_error("Called pmgr_abort() Code: %d, Msg: %s", code, buf);
     }
 
-    if (mpirun_use_pmi) {
+    if (mpirun_pmi_enable) {
 #ifdef HAVE_PMI
         PMI_Abort(code, buf);
 #endif /* ifdef HAVE_PMI */
