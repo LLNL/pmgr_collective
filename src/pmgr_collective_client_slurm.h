@@ -23,6 +23,6 @@
 
 /* given number of ranks, our rank, our ip address, and our port,
  * build and return table of all ip addresses and ports in job */
-int pmgr_tree_open_slurm(pmgr_tree_t* t, int ranks, int rank);
+int pmgr_tree_open_slurm(pmgr_tree_t* t, int ranks, int rank, const char* auth);
 
 #endif /* _PMGR_COLLECTIVE_CLIENT_SLURM_H */

@@ -85,13 +85,13 @@ int pmgr_tree_abort(pmgr_tree_t* t);
 int pmgr_tree_check(pmgr_tree_t* t, int value);
 
 /* open socket tree across MPI tasks */
-int pmgr_tree_open(pmgr_tree_t* t, int ranks, int rank);
+int pmgr_tree_open(pmgr_tree_t* t, int ranks, int rank, const char* auth);
 
 /* given a table of ranks number of ip:port entries, open the tree */
-int pmgr_tree_open_table(pmgr_tree_t* t, int ranks, int rank, const void* table, int sockfd);
+int pmgr_tree_open_table(pmgr_tree_t* t, int ranks, int rank, const void* table, int sockfd, const char* auth);
 
 /* given a table of ranks number of ip:port entries, open a tree */
-int pmgr_tree_open_nodelist_scan(pmgr_tree_t* t, const char* nodelist, const char* portrange, int sockfd);
+int pmgr_tree_open_nodelist_scan(pmgr_tree_t* t, const char* nodelist, const char* portrange, int portoffset, int sockfd, const char* auth);
 
 /*
  * =============================
@@ -109,11 +109,11 @@ int pmgr_tree_gather(pmgr_tree_t* t, void* sendbuf, int sendcount, void* recvbuf
 int pmgr_tree_scatter(pmgr_tree_t* t, void* sendbuf, int sendcount, void* recvbuf);
 
 /* computes maximum integer across all processes and saves it to recvbuf on rank 0 */
-int pmgr_tree_reducemaxint(pmgr_tree_t* t, int* sendint, int* recvint);
+int pmgr_tree_allreduce_int64t(pmgr_tree_t* t, int64_t* sendint, int64_t* recvint, pmgr_op op);
 
 /* collects all data from all tasks into recvbuf which is at most max_recvcount bytes big,
  * effectively works like a gatherdv */
-int pmgr_tree_aggregate(pmgr_tree_t*, const void* sendbuf, int sendcount, void* recvbuf, int max_recvcount, int* out_count);
+int pmgr_tree_aggregate(pmgr_tree_t*, const void* sendbuf, int64_t sendcount, void* recvbuf, int64_t recvcount, int64_t* written);
 
 /* alltoall sendcount bytes from each process to each process via tree */
 int pmgr_tree_alltoall(pmgr_tree_t* t, void* sendbuf, int sendcount, void* recvbuf);

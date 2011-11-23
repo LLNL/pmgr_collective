@@ -27,6 +27,7 @@
 
 #include "pmgr_collective_common.h"
 #include "pmgr_collective_client.h"
+#include "pmgr_collective_client_common.h"
 #include "pmgr_collective_client_mpirun.h"
 
 /* parameters for connection attempts */

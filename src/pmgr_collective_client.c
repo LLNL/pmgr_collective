@@ -52,6 +52,7 @@
 #include <arpa/inet.h>
 
 #include "pmgr_collective_client.h"
+#include "pmgr_collective_client_common.h"
 #include "pmgr_collective_client_mpirun.h"
 #include "pmgr_collective_client_tree.h"
 #include "pmgr_collective_client_slurm.h"
@@ -59,6 +60,11 @@
 #include "pmi.h"
 
 #define PMGR_DEBUG_LEVELS (3)
+
+/* total time to wait to get through pmgr_open */
+#ifndef MPIRUN_OPEN_TIMEOUT
+#define MPIRUN_OPEN_TIMEOUT (5*60) /* seconds */
+#endif
 
 /* set env variable to configure socket timeout parameters */
 #ifndef MPIRUN_CONNECT_TRIES
@@ -72,6 +78,22 @@
 #endif
 #ifndef MPIRUN_CONNECT_RANDOM
 #define MPIRUN_CONNECT_RANDOM (1) /* enable/disable randomized option for backoff */
+#endif
+
+#ifndef MPIRUN_PORT_SCAN_TIMEOUT      /* total time we'll try to connect to a host before throwing a fatal error */
+#define MPIRUN_PORT_SCAN_TIMEOUT (60) /* seconds */
+#endif
+#ifndef MPIRUN_PORT_SCAN_CONNECT_TIMEOUT      /* time to wait before giving up on connect call */
+#define MPIRUN_PORT_SCAN_CONNECT_TIMEOUT (20) /* millisecs */
+#endif
+#ifndef MPIRUN_PORT_SCAN_CONNECT_ATTEMPTS     /* number of consecutive times to try a given port */
+#define MPIRUN_PORT_SCAN_CONNECT_ATTEMPTS (1) /* seconds */
+#endif
+#ifndef MPIRUN_PORT_SCAN_CONNECT_SLEEP      /* time to sleep between consecutive connect calls */
+#define MPIRUN_PORT_SCAN_CONNECT_SLEEP (10) /* millisecs */
+#endif
+#ifndef MPIRUN_PORT_SCAN_AUTHENTICATE_TIMEOUT      /* time to wait for read to complete after making connection */
+#define MPIRUN_PORT_SCAN_AUTHENTICATE_TIMEOUT (20) /* milliseconds */
 #endif
 
 /* set env variable whether to use trees */
@@ -88,16 +110,30 @@
 #define MPIRUN_USE_SHM (1)
 #endif
 
+/* total time to get through pmgr_open */
+int mpirun_open_timeout = MPIRUN_OPEN_TIMEOUT;
+
+/* startup time, time between starting pmgr_open and finishing pmgr_close */
+struct timeval time_open;
+struct timeval time_close;
+
 /* parameters for connection attempts */
 int mpirun_connect_tries    = MPIRUN_CONNECT_TRIES;
-int mpirun_connect_timeout  = MPIRUN_CONNECT_TIMEOUT; /* seconds */
-int mpirun_connect_backoff  = MPIRUN_CONNECT_BACKOFF; /* seconds */
+int mpirun_connect_timeout  = MPIRUN_CONNECT_TIMEOUT;
+int mpirun_connect_backoff  = MPIRUN_CONNECT_BACKOFF;
 int mpirun_connect_random   = MPIRUN_CONNECT_RANDOM;
 
 unsigned pmgr_backoff_rand_seed;
 
+/* parameters for connection attempts when conduction a port scan */
+int mpirun_port_scan_timeout              = MPIRUN_PORT_SCAN_TIMEOUT;
+int mpirun_port_scan_connect_timeout      = MPIRUN_PORT_SCAN_CONNECT_TIMEOUT;
+int mpirun_port_scan_connect_attempts     = MPIRUN_PORT_SCAN_CONNECT_ATTEMPTS;
+int mpirun_port_scan_connect_sleep        = MPIRUN_PORT_SCAN_CONNECT_SLEEP;
+int mpirun_port_scan_authenticate_timeout = MPIRUN_PORT_SCAN_AUTHENTICATE_TIMEOUT;
+
 /* set envvar MPIRUN_USE_TREES={0,1} to disable/enable tree algorithms */
-static int mpirun_use_trees       = MPIRUN_USE_TREES;
+static int mpirun_use_trees = MPIRUN_USE_TREES;
 
 /* whether to use PMI library to bootstrap */
 int mpirun_use_pmi = MPIRUN_USE_PMI;
@@ -110,15 +146,11 @@ static int   pmgr_id     = -1;
 static int   pmgr_is_open = 0;
 
 /* records details on server process to bootstrap */
-char* mpirun_hostname;
-int   mpirun_port;
+char* mpirun_hostname = NULL;
+int   mpirun_port = 0;
 
 /* binomial tree containing all procs in job */
 pmgr_tree_t pmgr_tree_all;
-
-/* startup time, time between starting pmgr_open and finishing pmgr_close */
-static struct timeval time_open;
-static struct timeval time_close;
 
 /* 
  * =============================
@@ -159,7 +191,7 @@ int pmgr_barrier()
         pmgr_error("Must call pmgr_open() before pmgr_barrier() @ file %s:%d",
             __FILE__, __LINE__
         );
-        return !PMGR_SUCCESS;
+        return PMGR_FAILURE;
     }
 
     /* check whether we have an mpirun process */
@@ -180,6 +212,77 @@ int pmgr_barrier()
 }
 
 /*
+ * Perform MPI-like Allreduce of a single int64_t from each task
+ */
+int pmgr_allreduce_int64t(int64_t* sendint, int64_t* recvint, pmgr_op op)
+{
+    struct timeval start, end;
+    pmgr_gettimeofday(&start);
+    pmgr_debug(3, "Starting pmgr_allreduce_int64t()");
+
+    int rc = PMGR_SUCCESS;
+
+    /* bail out if we're not open */
+    if (!pmgr_is_open) {
+        pmgr_error("Must call pmgr_open() before pmgr_allreducemaxint() @ file %s:%d",
+            __FILE__, __LINE__
+        );
+        return PMGR_FAILURE;
+    }
+
+    /* verify that user provided some data */
+    if (sendint == NULL || recvint == NULL) {
+        return PMGR_FAILURE;
+    }
+
+    /* reduce the maximum integer to rank 0 and store in max */
+    if (pmgr_tree_is_open(&pmgr_tree_all)) {
+        /* use the tree to do our reduction */
+        rc = pmgr_tree_allreduce_int64t(&pmgr_tree_all, sendint, recvint, op);
+        if (rc != PMGR_SUCCESS) {
+            return rc;
+        }
+    } else {
+        /* have no tree, gather all values to rank 0 */
+        /* allocate space to receive ints from everyone */
+        int64_t* all = NULL;
+        if (pmgr_me == 0) {
+            all = (int64_t*) pmgr_malloc((size_t)pmgr_nprocs * sizeof(int64_t), "One int64_t for each task");
+        }
+
+        /* gather all ints to rank 0 */
+        rc = pmgr_gather((void*) sendint, sizeof(int64_t), (void*) all, 0);
+        if (rc != PMGR_SUCCESS) {
+            if (pmgr_me == 0) {
+                pmgr_free(all);
+            }
+            return rc;
+        }
+
+        /* rank 0 searches through list for maximum value */
+        if (pmgr_me == 0) {
+            int i;
+            *recvint = all[0];
+            for (i = 1; i < pmgr_nprocs; i++) {
+                if (op == PMGR_SUM) {
+                    *recvint += all[i];
+                } else if (op == PMGR_MAX && all[i] > *recvint) {
+                    *recvint = all[i];
+                }
+            }
+            pmgr_free(all);
+        }
+
+        /* broadcast max int from rank 0 and set recvint */
+        rc = pmgr_bcast((void*) recvint, sizeof(int64_t), 0);
+    }
+
+    pmgr_gettimeofday(&end);
+    pmgr_debug(2, "Exiting pmgr_allreduce_int64t(), took %f seconds for %d procs", pmgr_getsecs(&end,&start), pmgr_nprocs);
+    return rc;
+}
+
+/*
  * Perform MPI-like Broadcast, root writes sendcount bytes from buf,
  * into mpirun_socket, all receive sendcount bytes into buf
  */
@@ -196,7 +299,12 @@ int pmgr_bcast(void* buf, int sendcount, int root)
         pmgr_error("Must call pmgr_open() before pmgr_bcast() @ file %s:%d",
             __FILE__, __LINE__
         );
-        return !PMGR_SUCCESS;
+        return PMGR_FAILURE;
+    }
+
+    /* verify that user provided some data */
+    if (buf == NULL || sendcount <= 0) {
+        return PMGR_FAILURE;
     }
 
     /* check whether we have an mpirun process */
@@ -233,7 +341,13 @@ int pmgr_gather(void* sendbuf, int sendcount, void* recvbuf, int root)
         pmgr_error("Must call pmgr_open() before pmgr_gather() @ file %s:%d",
             __FILE__, __LINE__
         );
-        return !PMGR_SUCCESS;
+        return PMGR_FAILURE;
+    }
+
+    /* verify that user provided some data,
+     * note that we don't check recvbuf since only the root will receive anything */
+    if (sendbuf == NULL || sendcount <= 0) {
+        return PMGR_FAILURE;
     }
 
     /* check whether we have an mpirun process */
@@ -272,7 +386,13 @@ int pmgr_scatter(void* sendbuf, int sendcount, void* recvbuf, int root)
         pmgr_error("Must call pmgr_open() before pmgr_scatter() @ file %s:%d",
             __FILE__, __LINE__
         );
-        return !PMGR_SUCCESS;
+        return PMGR_FAILURE;
+    }
+
+    /* verify that user provided some data,
+     * note that we don't check sendbuf since only the root will send anything */
+    if (recvbuf == NULL || sendcount <= 0) {
+        return PMGR_FAILURE;
     }
 
     /* check whether we have an mpirun process */
@@ -311,7 +431,12 @@ int pmgr_allgather(void* sendbuf, int sendcount, void* recvbuf)
         pmgr_error("Must call pmgr_open() before pmgr_allgather() @ file %s:%d",
             __FILE__, __LINE__
         );
-        return !PMGR_SUCCESS;
+        return PMGR_FAILURE;
+    }
+
+    /* verify that user provided some data */
+    if (sendbuf == NULL || recvbuf == NULL || sendcount <= 0) {
+        return PMGR_FAILURE;
     }
 
     /* check whether we have an mpirun process */
@@ -360,7 +485,12 @@ int pmgr_alltoall(void* sendbuf, int sendcount, void* recvbuf)
         pmgr_error("Must call pmgr_open() before pmgr_alltoall() @ file %s:%d",
             __FILE__, __LINE__
         );
-        return !PMGR_SUCCESS;
+        return PMGR_FAILURE;
+    }
+
+    /* verify that user provided some data */
+    if (sendbuf == NULL || recvbuf == NULL || sendcount <= 0) {
+        return PMGR_FAILURE;
     }
 
     /* check whether we have an mpirun process */
@@ -377,72 +507,6 @@ int pmgr_alltoall(void* sendbuf, int sendcount, void* recvbuf)
 
     pmgr_gettimeofday(&end);
     pmgr_debug(2, "Exiting pmgr_alltoall(), took %f seconds for %d procs", pmgr_getsecs(&end,&start), pmgr_nprocs);
-    return rc;
-}
-
-/*
- * Perform MPI-like Allreduce maximum of a single int from each task
- */
-int pmgr_allreducemaxint(int* sendint, int* recvint)
-{
-    struct timeval start, end;
-    pmgr_gettimeofday(&start);
-    pmgr_debug(3, "Starting pmgr_allreducemaxint()");
-
-    int rc = PMGR_SUCCESS;
-
-    /* bail out if we're not open */
-    if (!pmgr_is_open) {
-        pmgr_error("Must call pmgr_open() before pmgr_allreducemaxint() @ file %s:%d",
-            __FILE__, __LINE__
-        );
-        return !PMGR_SUCCESS;
-    }
-
-    /* reduce the maximum integer to rank 0 and store in max */
-    int max;
-    if (pmgr_tree_is_open(&pmgr_tree_all)) {
-        /* use the tree to do our reduction */
-        rc = pmgr_tree_reducemaxint(&pmgr_tree_all, sendint, &max);
-        if (rc != PMGR_SUCCESS) {
-            return rc;
-        }
-    } else {
-        /* have no tree, gather all values to rank 0 */
-        /* allocate space to receive ints from everyone */
-        int* all = NULL;
-        if (pmgr_me == 0) {
-            all = (int*) pmgr_malloc((size_t)pmgr_nprocs * sizeof(int), "One int for each task");
-        }
-
-        /* gather all ints to rank 0 */
-        rc = pmgr_gather((void*) sendint, sizeof(int), (void*) all, 0);
-        if (rc != PMGR_SUCCESS) {
-            if (pmgr_me == 0) {
-                pmgr_free(all);
-            }
-            return rc;
-        }
-
-        /* rank 0 searches through list for maximum value */
-        if (pmgr_me == 0) {
-            int i;
-            max = *sendint;
-            for (i=0; i<pmgr_nprocs; i++) {
-                if (all[i] > max) {
-                    max = all[i];
-                }
-            }
-            pmgr_free(all);
-        }
-    }
-
-    /* broadcast max int from rank 0 and set recvint */
-    rc = pmgr_bcast((void*) &max, sizeof(int), 0);
-    *recvint = max;
-
-    pmgr_gettimeofday(&end);
-    pmgr_debug(2, "Exiting pmgr_allreducemaxint(), took %f seconds for %d procs", pmgr_getsecs(&end,&start), pmgr_nprocs);
     return rc;
 }
 
@@ -477,13 +541,13 @@ int pmgr_allgatherstr(char* sendstr, char*** recvstr, char** recvbuf)
         pmgr_error("Must call pmgr_open() before pmgr_allgatherstr() @ file %s:%d",
             __FILE__, __LINE__
         );
-        return !PMGR_SUCCESS;
+        return PMGR_FAILURE;
     }
 
     /* determine max length of send strings */
-    int mylen  = strlen(sendstr) + 1;
-    int maxlen = 0;
-    rc = pmgr_allreducemaxint(&mylen, &maxlen);
+    int64_t mylen  = strlen(sendstr) + 1;
+    int64_t maxlen = 0;
+    rc = pmgr_allreduce_int64t(&mylen, &maxlen, PMGR_MAX);
     if (rc != PMGR_SUCCESS) {
         /* if the reduce failed, we can't trust the value of maxlen */
         *recvstr = NULL;
@@ -518,6 +582,84 @@ int pmgr_allgatherstr(char* sendstr, char*** recvstr, char** recvbuf)
     return rc;
 }
 
+static int pmgr_treeless_aggregate(const void* sendbuf, int64_t sendcount,
+    void* recvbuf, int64_t recvcount, int64_t* writte)
+{
+        /* determine sum of sendcounts from all ranks */
+
+        /* ensure this total fits within the receive buffer */
+
+        /* find max sendcount on all ranks */
+
+        /* allocate enough to hold this amount from each rank,
+         * plus an leading int64_t */
+
+        /* gather to rank 0 */
+
+        /* rank 0 copies data into recvbuf */
+
+        /* free temp buffer */
+
+        /* bcast receive buf to all tasks */
+
+    return PMGR_SUCCESS;
+}
+
+/* collects data sent by each rank and writes at most max_recvcount bytes
+ * into recvbuf.  sendcount may be different on each process, actual number
+ * of bytes received provided as output in written.  data is *not* ordered
+ * by rank, nor is it guaranteed to be received in the same order on each rank */
+int pmgr_aggregate(const void* sendbuf, int64_t sendcount,
+    void* recvbuf, int64_t recvcount, int64_t* written)
+{
+    struct timeval start, end;
+    pmgr_gettimeofday(&start);
+    pmgr_debug(3, "Starting pmgr_allgatherstr()");
+
+    int rc = PMGR_SUCCESS;
+
+    /* bail out if we're not open */
+    if (!pmgr_is_open) {
+        pmgr_error("Must call pmgr_open() before pmgr_aggregate() @ file %s:%d",
+            __FILE__, __LINE__
+        );
+        return PMGR_FAILURE;
+    }
+
+    /* verify that user provided some data */
+    if (sendbuf == NULL || recvbuf == NULL ||
+        sendcount < 0 || recvcount < 0 || written == NULL)
+    {
+        return PMGR_FAILURE;
+    }
+
+    /* check whether we have an mpirun process */
+    if (pmgr_nprocs > 1) {
+        if (pmgr_tree_is_open(&pmgr_tree_all)) {
+            rc = pmgr_tree_aggregate(&pmgr_tree_all, sendbuf, sendcount,
+                recvbuf, recvcount, written
+            );
+        } else {
+            rc = pmgr_treeless_aggregate(sendbuf, sendcount,
+                recvbuf, recvcount, written
+            );
+        }
+    } else {
+        /* just a single process, just copy the data over */
+        if (recvcount < sendcount) {
+            return PMGR_FAILURE;
+        }
+        if (sendcount > 0) {
+            memcpy(recvbuf, sendbuf, sendcount);
+        }
+        *written = sendcount;
+    }
+
+    pmgr_gettimeofday(&end);
+    pmgr_debug(2, "Exiting pmgr_aggregate(), took %f seconds for %d procs", pmgr_getsecs(&end,&start), pmgr_nprocs);
+    return rc;
+}
+
 int pmgr_open()
 {
     struct timeval start, end;
@@ -539,7 +681,18 @@ int pmgr_open()
 
         /* open up socket tree, if enabled */
         if (mpirun_use_trees) {
-            pmgr_tree_open(&pmgr_tree_all, pmgr_nprocs, pmgr_me);
+            /* set up our authentication text to verify connections */
+            char auth_text[1024];
+            size_t auth_len = snprintf(auth_text, sizeof(auth_text), "%d::%s", pmgr_id, "ALL") + 1;
+            if (auth_len > sizeof(auth_text)) {
+                pmgr_error("Authentication text too long, %d bytes exceeds limit %d @ file %s:%d",
+                    auth_len, sizeof(auth_text), __FILE__, __LINE__
+                );
+                exit(1);
+            }
+
+            /* now open our tree */
+            pmgr_tree_open(&pmgr_tree_all, pmgr_nprocs, pmgr_me, auth_text);
         }
     }
     /* just a single process, we don't need to open a connection here */
@@ -646,6 +799,10 @@ int pmgr_init(int *argc_p, char ***argv_p, int *np_p, int *me_p, int *id_p)
 
         /* mpirun port number */
         mpirun_port = atoi(pmgr_getenv("MPIRUN_PORT", ENV_REQUIRED));
+    }
+
+    if ((value = pmgr_getenv("MPIRUN_OPEN_TIMEOUT", ENV_OPTIONAL))) {
+        mpirun_open_timeout = atoi(value);
     }
 
     if ((value = pmgr_getenv("MPIRUN_CONNECT_TRIES", ENV_OPTIONAL))) {
@@ -759,14 +916,6 @@ int pmgr_init(int *argc_p, char ***argv_p, int *np_p, int *me_p, int *id_p)
             }
         }
     }
-    pmgr_debug(3, "In pmgr_init():\n" \
-        "  MPIRUN_RANK: %d, MPIRUN_NPROCS: %d, MPIRUN_ID: %d, MPIRUN_HOST: %s, MPIRUN_PORT: %d\n" \
-        "  MPIRUN_CONNECT_TRIES: %d, MPIRUN_CONNECT_TIMEOUT: %d, MPIRUN_CONNECT_BACKOFF: %d, MPIRUN_CONNECT_RANDOM: %d\n" \
-        "  MPIRUN_USE_TREES: %d, MPIRUN_USE_PMI: %d",
-        pmgr_me, pmgr_nprocs, pmgr_id, mpirun_hostname, mpirun_port,
-        mpirun_connect_tries, mpirun_connect_timeout, mpirun_connect_backoff, mpirun_connect_random,
-        mpirun_use_trees, mpirun_use_pmi
-    );
 
     /* check that we have a valid number of processes */
     if (pmgr_nprocs <= 0) {

@@ -13,18 +13,21 @@
 
 #include "pmgr_collective_client.h"
 #include "pmgr_collective_ranges.h"
+#include "pmgr_collective_client_common.h"
 #include "pmgr_collective_client_tree.h"
 #include "pmgr_collective_client_slurm.h"
 
-#ifndef PMGR_CLIENT_SLURM_PREFIX
-#define PMGR_CLIENT_SLURM_PREFIX ("/dev/shm")
+#ifndef MPIRUN_SLURM_SHM_PREFIX
+#define MPIRUN_SLURM_SHM_PREFIX ("/dev/shm")
 #endif
 
-#ifndef PMGR_CLIENT_SLURM_PORTS
-#define PMGR_CLIENT_SLURM_PORTS ("10000-10250")
-//#define PMGR_CLIENT_SLURM_PORTS ("10000-10050")
-//#define PMGR_CLIENT_SLURM_PORTS ("10000-10010")
+#ifndef MPIRUN_SLURM_SHM_PORTS
+//#define MPIRUN_SLURM_SHM_PORTS ("10000-10250")
+//#define MPIRUN_SLURM_SHM_PORTS ("10000-10050")
+#define MPIRUN_SLURM_SHM_PORTS ("10000-10010")
 #endif
+
+extern int mpirun_open_timeout;
 
 /* wait until file reaches expected size, read in data, and return number of bytes read */
 static int pmgr_slurm_wait_check_in(const char* file, int max_local, int precise, int* num_checked_in)
@@ -207,11 +210,12 @@ static void pmgr_slurm_barrier_init(void* buf, int ranks, int rank)
     }
 }
 
-/* rank 0 waits until all procs have set their field to 1 */
-static void pmgr_slurm_barrier_signal(void* buf, int ranks, int rank)
+/* rank 0 waits until all procs have set their signal field to 1,
+ * it then sets all signal fields back to 0 for next barrier call */
+static void pmgr_slurm_barrier_signal(volatile void* buf, int ranks, int rank)
 {
     int i;
-    int* mem = buf;
+    volatile int* mem = buf;
     if (rank == 0) {
         /* wait until all procs have set their field to 1 */
         for (i = 1; i < ranks; i++) { 
@@ -231,34 +235,50 @@ static void pmgr_slurm_barrier_signal(void* buf, int ranks, int rank)
     /* MEM_WRITE_SYNC */
 }
 
-/* all ranks wait for rank 0 to set their field to 1 */
-static void pmgr_slurm_barrier_wait(void* buf, int ranks, int rank)
+/* all ranks wait for rank 0 to set their wait field to 1,
+ * each rank then sets its wait field back to 0 for next barrier call */
+static int pmgr_slurm_barrier_wait(volatile void* buf, int ranks, int rank, double timelimit)
 {
+    int rc = PMGR_SUCCESS;
+
     int i;
-    int* mem = buf;
+    volatile int* mem = buf;
     if (rank == 0) {
         /* change all flags to 1 */
         for (i = 1; i < ranks; i++){ 
             mem[i] = 1;
         }
     } else {
-        /* wait until leader flips our flag to 1 */
+        /* wait until leader flips our flag to 1 (or 3sec timelimit expires) */
+        struct timeval start, end;
+        pmgr_gettimeofday(&start); 
         while (mem[rank] == 0) {
-            ; /* MEM_READ_SYNC */
+            if (timelimit > 0.0) {
+                pmgr_gettimeofday(&end);
+                double waited = pmgr_getsecs(&end, &start);
+                if (waited > timelimit) {
+                    rc = PMGR_FAILURE;
+                    break;
+                }
+            }
+            /* MEM_READ_SYNC */
         }
 
         /* set our flag back to 0 for the next iteration */
         mem[rank] = 0;
     }
     /* MEM_WRITE_SYNC */
+
+    return rc;
 }
 
 /* execute a shared memory barrier, note this is a two phase process
  * to prevent procs from escaping ahead */
-static void pmgr_slurm_barrier(void* buf, int max_ranks, int ranks, int rank)
+static int pmgr_slurm_barrier(void* buf, int max_ranks, int ranks, int rank, double timelimit)
 {
     pmgr_slurm_barrier_signal(buf, ranks, rank);
-    pmgr_slurm_barrier_wait(buf + max_ranks * sizeof(int), ranks, rank);
+    int rc = pmgr_slurm_barrier_wait(buf + max_ranks * sizeof(int), ranks, rank, timelimit);
+    return rc;
 }
 
 /* attach to the shared memory segment, rank 0 should do this before any others */
@@ -277,7 +297,7 @@ static void* pmgr_slurm_attach_shm_segment(size_t size, const char* file, int ra
         return NULL;
     }
 
-    /* set the size, but be careful not to actually touch any memory */
+    /* set the size */
     if (rank == 0) {
         ftruncate(fd, 0);
         ftruncate(fd, (off_t) size);
@@ -302,54 +322,70 @@ static void* pmgr_slurm_attach_shm_segment(size_t size, const char* file, int ra
     return ptr;
 }
 
-static int pmgr_slurm_exchange_leaders(
-    const char* nodelist, const char* portrange, int node,
-    void* sendbuf, size_t sendcount, void* recvbuf, size_t max_recvcount, size_t* recvcount)
+static int pmgr_slurm_open_leaders(const char* nodelist, int node, const char* portrange, int portoffset, const char* auth, pmgr_tree_t* t)
 {
     /* count number of nodes */
     int nodes;
     pmgr_range_nodelist_size(nodelist, &nodes);
 
-    /* we're the only node in town, so take a short cut */
+    /* prepare our tree */
+//    pmgr_tree_init_binomial(&node_tree, nodes, node);
+    pmgr_tree_init_binary(t, nodes, node);
+
+    /* if we're the only node in town, take a short cut */
     if (nodes == 1) {
-        /* issue a collect */
-        memcpy(recvbuf, sendbuf, sendcount);
-        *recvcount = sendcount;
         return PMGR_SUCCESS;
+    }
+
+    /* set up our authentication text to verify connections */
+    char auth_text[1024];
+    size_t auth_len = snprintf(auth_text, sizeof(auth_text), "%s::%s", auth, "LEADERS") + 1;
+    if (auth_len > sizeof(auth_text)) {
+        pmgr_error("Authentication text too long, %d bytes exceeds limit %d @ file %s:%d",
+            auth_len, sizeof(auth_text), __FILE__, __LINE__
+        );
+        exit(1);
     }
 
     /* open a socket within port range */
     int sockfd = -1;
     struct in_addr ip;
     short port;
-    if (pmgr_open_listening_socket(portrange, &sockfd, &ip, &port) != PMGR_SUCCESS) {
+    if (pmgr_open_listening_socket(portrange, portoffset, &sockfd, &ip, &port) != PMGR_SUCCESS) {
         pmgr_error("Creating listening socket @ file %s:%d",
             __FILE__, __LINE__
         );
         exit(1);
     }
 
-    /* prepare a tree */
-    pmgr_tree_t node_tree;
-//    pmgr_tree_init_binomial(&node_tree, nodes, node);
-    pmgr_tree_init_binary(&node_tree, nodes, node);
-
     /* open the tree */
-    pmgr_tree_open_nodelist_scan(&node_tree, nodelist, portrange, sockfd);
+    pmgr_tree_open_nodelist_scan(t, nodelist, portrange, portoffset, sockfd, auth_text);
 
-    /* issue a collect */
-    int out_recvcount;
-    pmgr_tree_aggregate(&node_tree, sendbuf, (int) sendcount, recvbuf, (int) max_recvcount, &out_recvcount);
-    *recvcount = (size_t) out_recvcount;
-
-    /* close the tree */
-    pmgr_tree_close(&node_tree);
-
-    /* close our socket */
+    /* close our listening socket */
     if (sockfd >= 0) {
         close(sockfd);
         sockfd = -1;
     }
+
+    return PMGR_SUCCESS;
+}
+
+static int pmgr_slurm_exchange_leaders(pmgr_tree_t* t, const void* sendbuf, size_t sendcount, void* recvbuf, size_t max_recvcount, size_t* recvcount)
+{
+    /* if we're the only node in town, take a short cut */
+    if (t->ranks == 1) {
+        /* issue a collect */
+        memcpy(recvbuf, sendbuf, sendcount);
+        *recvcount = sendcount;
+        return PMGR_SUCCESS;
+    }
+
+    /* issue a collect */
+    int64_t sendcount64 = (int64_t) sendcount;
+    int64_t recvcount64 = (int64_t) recvcount;
+    int64_t written;
+    pmgr_tree_aggregate(t, sendbuf, sendcount64, recvbuf, recvcount64, &written);
+    *recvcount = (size_t) written;
 
     return PMGR_SUCCESS;
 }
@@ -362,7 +398,7 @@ static int pmgr_slurm_exchange_leaders(
  *   - each process knows the set of nodes used in the job
  */
 
-int pmgr_tree_open_slurm(pmgr_tree_t* t, int ranks, int rank)
+int pmgr_tree_open_slurm(pmgr_tree_t* t, int ranks, int rank, const char* auth)
 {
     int rc = PMGR_SUCCESS;
     char* value;
@@ -380,9 +416,17 @@ int pmgr_tree_open_slurm(pmgr_tree_t* t, int ranks, int rank)
     int slurm_nodeid  = -1;
     int slurm_localid = -1;
 
-    /* TODO: eventually, read this from enviroment to allow user to override */
-    prefix = strdup(PMGR_CLIENT_SLURM_PREFIX);
-    portrange = strdup(PMGR_CLIENT_SLURM_PORTS);
+    if ((value = getenv("MPIRUN_SLURM_SHM_PREFIX")) != NULL) {
+        prefix = strdup(value);
+    } else {
+        prefix = strdup(MPIRUN_SLURM_SHM_PREFIX);
+    }
+
+    if ((value = getenv("MPIRUN_SLURM_SHM_PORTS")) != NULL) {
+        portrange = strdup(value);
+    } else {
+        portrange = strdup(MPIRUN_SLURM_SHM_PORTS);
+    }
 
     /* read SLURM environment variables */
     if ((value = getenv("SLURM_JOBID")) != NULL) {
@@ -450,7 +494,9 @@ int pmgr_tree_open_slurm(pmgr_tree_t* t, int ranks, int rank)
 
     /* build file name: jobid.stepid.checkin */
     char file_check_in[1024];
-    if (snprintf(file_check_in, sizeof(file_check_in), "%s/%d.%d.checkin", prefix, slurm_jobid, slurm_stepid) >= sizeof(file_check_in)) {
+    if (snprintf(file_check_in, sizeof(file_check_in), "%s/%d.%d.checkin",
+        prefix, slurm_jobid, slurm_stepid) >= sizeof(file_check_in))
+    {
         pmgr_error("Filename too long %s/%d.%d.checkin @ file %s:%d",
             prefix, slurm_jobid, slurm_stepid, __FILE__, __LINE__
         );
@@ -459,7 +505,9 @@ int pmgr_tree_open_slurm(pmgr_tree_t* t, int ranks, int rank)
 
     /* build file name: jobid.stepid.table */
     char file_table[1024];
-    if (snprintf(file_table, sizeof(file_table), "%s/%d.%d.table", prefix, slurm_jobid, slurm_stepid) >= sizeof(file_table)) {
+    if (snprintf(file_table, sizeof(file_table), "%s/%d.%d.table",
+        prefix, slurm_jobid, slurm_stepid) >= sizeof(file_table))
+    {
         pmgr_error("Filename too long %s/%d.%d.table @ file %s:%d",
             prefix, slurm_jobid, slurm_stepid, __FILE__, __LINE__
         );
@@ -478,11 +526,7 @@ int pmgr_tree_open_slurm(pmgr_tree_t* t, int ranks, int rank)
     size_t table_offset   = count_offset   + sizeof(int);
     off_t  segment_size   = (off_t) (table_offset + ranks * addr_size);
 
-    /* start timer for check in */
-    struct timeval check_start, check_end;
-    pmgr_gettimeofday(&check_start); 
-
-    /* have leader create and initialize shared memory segment *before* checking in */
+    /* have proc with slurm_localid == 0 create and initialize shared memory segment *before* checking in */
     if (slurm_localid == 0) {
         /* create the shm segment */
         segment = pmgr_slurm_attach_shm_segment(segment_size, file_table, slurm_localid);
@@ -494,7 +538,10 @@ int pmgr_tree_open_slurm(pmgr_tree_t* t, int ranks, int rank)
         }
     }
 
-    /* each process writes its rank to the file via exclusive lock to check in */
+    /* each process writes its rank to the file via exclusive lock to check in,
+     * and each process is assigned a rank depending on the order it checked in,
+     * procs with slurm_localid != 0 wait on proc with slurm_localid == 0 to create file,
+     * this synchronization ensures that the shared memory segment has been initialized */
     int rank_checked_in;
     if (pmgr_slurm_check_in(file_check_in, slurm_localid, rank, &rank_checked_in) != PMGR_SUCCESS) {
         pmgr_error("Failed to write rank to file @ file %s:%d",
@@ -503,136 +550,195 @@ int pmgr_tree_open_slurm(pmgr_tree_t* t, int ranks, int rank)
         exit(1);
     }
 
-    /* attach the rest of the procs to the shared memory segment */
+    /* now attach everyone else to the shared memory segment */
     if (slurm_localid != 0) {
         segment = pmgr_slurm_attach_shm_segment(segment_size, file_table, slurm_localid);
     }
 
-    /* because the process with slurm_localid==0 may not have gotten rank_checked_in==0,
-     * we need to replace max_local/slurm_localid with ranks/rank_checked_in */
+    /* from now on, we use rank_checked_in as the local rank of each process,
+     * note that the process with slurm_localid==0 may not have gotten rank_checked_in==0 */
 
-    /* leader waits for all procs to checkin and others attach to shared memory segment,
-     * the shared memory segment is guaranteed to be initialized because all procs wait
-     * on the leader to create the check in file, and the leader only creates this file
-     * after creating and initializing the shared memory segment */
-    int ranks_checked_in = 0;
+    /* open a tree across the leader processes */
+    pmgr_tree_t leader_tree;
+    pmgr_tree_init_null(&leader_tree);
     if (rank_checked_in == 0) {
-        /* wait until all procs have written to file */
-        pmgr_slurm_wait_check_in(file_check_in, max_local, precise, &ranks_checked_in);
+        /* start timer for opening leader tree */
+        struct timeval leader_open_start, leader_open_end;
+        pmgr_gettimeofday(&leader_open_start); 
 
-        /* stop timer for check in and print cost */
-        pmgr_gettimeofday(&check_end);
-        pmgr_debug(2, "Time for all procs to check in took %f seconds",
-            pmgr_getsecs(&check_end, &check_start)
+        /* TODO: loop over this attempt since it can timeout before completing */
+        /* open our tree of leader procs */
+        pmgr_slurm_open_leaders(slurm_step_nodelist, slurm_nodeid, portrange, slurm_stepid,
+            auth, &leader_tree
+        );
+
+        /* stop timer for opening leader tree */
+        pmgr_gettimeofday(&leader_open_end);
+        pmgr_debug(2, "Leader tree open time %f seconds",
+            pmgr_getsecs(&leader_open_end, &leader_open_start)
         );
     }
 
-    /* issue a barrier to signal that procs can write their IP:port to shared memory */
-    pmgr_slurm_barrier(segment + barrier_offset, max_local, ranks_checked_in, rank_checked_in);
-
-    /* create a socket to accept connection from parent */
+    /* start late check in loop, if a process is late to check in, we may need several iterations
+     * until everyone is accounted for */
     int sockfd = -1;
-    struct in_addr ip;
-    short port;
-    if (pmgr_open_listening_socket(NULL, &sockfd, &ip, &port) != PMGR_SUCCESS) {
-        pmgr_error("Creating listening socket @ file %s:%d",
-            __FILE__, __LINE__
-        );
-        exit(1);
-    }
-
-    /* write to our rank,ip,port info to shared memory, using the slot we got when checking in */
-    void* entry_offset = segment + node_offset + rank_checked_in * entry_size;
-    memcpy(entry_offset, &rank, sizeof(rank));
-    entry_offset += sizeof(rank);
-    memcpy(entry_offset, &ip, sizeof(ip));
-    entry_offset += sizeof(ip);
-    memcpy(entry_offset, &port, sizeof(port));
-
-    /* signal to leader that all procs are done */
-    pmgr_slurm_barrier(segment + barrier_offset, max_local, ranks_checked_in, rank_checked_in);
-
-    /* exchange data with other nodes and record all entries in table */
-    if (rank_checked_in == 0) {
-        /* start timer for leader excahgne */
-        struct timeval exchange_start, exchange_end;
-        pmgr_gettimeofday(&exchange_start); 
-
-        /* allocate space to hold entries from all processes on all nodes */
-        size_t max_data_all_size = ranks * entry_size;
-        void* data_all = pmgr_malloc(max_data_all_size, "Buffer to receive data from each node");
-
-        /* exchange data with other leaders */
-        size_t recvsize;
-        size_t sendsize = ranks_checked_in * entry_size;
-        pmgr_slurm_exchange_leaders(slurm_step_nodelist, portrange, slurm_nodeid, segment + node_offset, sendsize, data_all, max_data_all_size, &recvsize);
-
-        /* write ip:port values to table in shared memory, ordered by global rank */
-        size_t offset = 0;
-        int num_ranks = 0;
-        while (offset < recvsize) {
-            int current_rank = *(int*) (data_all + offset);
-            memcpy(segment + table_offset + current_rank * addr_size, data_all + offset + sizeof(int), addr_size);
-            offset += entry_size;
-            num_ranks++;
+    int have_table = 0;
+    int ranks_checked_in = 0;
+    while (!have_table) {
+        /* check whether we've exceeded the time to try to connect everything */
+        if (pmgr_have_exceeded_open_timeout()) {
+            if (rank == 0) {
+                pmgr_error("Exceeded time limit to startup @ file %s:%d",
+                    __FILE__, __LINE__
+                );
+            }
+            exit(1);
         }
 
-        /* set the count of the total number of tasks found across all nodes */
-        memcpy(segment + count_offset, &num_ranks, sizeof(int));
+        /* proc with rank_checked_in == 0 waits for all procs to check in,
+         * only this process will know how many others are actually checked in,
+         * this may return early with a count that is too small if some procs are slow to check in */
+        if (rank_checked_in == 0) {
+            /* wait until all procs have written to file (or until time limit expires) */
+            pmgr_slurm_wait_check_in(file_check_in, max_local, precise, &ranks_checked_in);
+        }
 
-        /* free the buffer used to collect data */
-        pmgr_free(data_all);
+        /* at this point, we can use shared memory barriers to sync processes that have checked in */
 
-        /* stop timer for leader excahgne and print cost */
-        pmgr_gettimeofday(&exchange_end);
-        pmgr_debug(2, "Leader exchange and copy time %f seconds",
-            pmgr_getsecs(&exchange_end, &exchange_start)
-        );
-    }
+        /* if a process checked in late, it will get stuck and eventually fail this first barrier,
+         * just have it circle back around until it either succeeds or times out, all other procs
+         * will detect that it's missing when they get the total number of entries in the table */
 
-    /* signal to indicate that exchange is complete */
-    pmgr_slurm_barrier(segment + barrier_offset, max_local, ranks_checked_in, rank_checked_in);
+        /* issue a barrier to signal that procs can open their listening sockets,
+         * we delay this open to avoid procs accepting connections from leaders during port scans
+         * when opening the leader tree */
+        if (pmgr_slurm_barrier(segment + barrier_offset, max_local, ranks_checked_in, rank_checked_in, 3.0) != PMGR_SUCCESS) {
+            continue;
+        }
 
-    /* check that number of entries matches number of ranks */
-    int table_ranks = *(int*) (segment + count_offset);
-    if (table_ranks == ranks) {
-        /* start time to measure cost to open tree */
-        struct timeval table_start, table_end;
-        pmgr_gettimeofday(&table_start); 
+        /* TODO: want to create a new listening socket each loop? */
 
-        /* now that we have our table, open our tree */
-        pmgr_tree_open_table(t, table_ranks, rank, segment + table_offset, sockfd);
+        /* create a socket to accept connection from parent and enter it into shared memory table */
+        if (sockfd == -1) {
+          struct in_addr ip;
+          short port;
+          if (pmgr_open_listening_socket(NULL, 0, &sockfd, &ip, &port) != PMGR_SUCCESS) {
+              pmgr_error("Creating listening socket @ file %s:%d",
+                  __FILE__, __LINE__
+              );
+              exit(1);
+          }
 
-        /* stop timer to measure cost to open tree and print cost */
-        pmgr_gettimeofday(&table_end);
-        pmgr_debug(2, "Open tree by table time %f seconds for %d procs",
-            pmgr_getsecs(&table_end, &table_start), ranks
-        );
-    } else {
-        if (slurm_nodeid == 0 && slurm_localid == 0) {
-            pmgr_error("Missing some processes after check in, have %d expected %d @ file %s:%d",
-                table_ranks, ranks, __FILE__, __LINE__
+          /* write to our globalrank,ip,port info to shared memory, using the slot we got when checking in */
+          void* entry_offset = segment + node_offset + rank_checked_in * entry_size;
+          memcpy(entry_offset, &rank, sizeof(rank));
+          entry_offset += sizeof(rank);
+          memcpy(entry_offset, &ip, sizeof(ip));
+          entry_offset += sizeof(ip);
+          memcpy(entry_offset, &port, sizeof(port));
+        }
+
+        /* signal to leader that all procs have written their IP:port info to shared memory */
+        pmgr_slurm_barrier(segment + barrier_offset, max_local, ranks_checked_in, rank_checked_in, -1.0);
+
+        /* exchange data with other leaders and record all entries in table */
+        if (rank_checked_in == 0) {
+            /* start timer for leader excahgne */
+            struct timeval exchange_start, exchange_end;
+            pmgr_gettimeofday(&exchange_start); 
+
+            /* allocate space to hold entries from all processes on all nodes */
+            size_t max_data_all_size = ranks * entry_size;
+            void* data_all = pmgr_malloc(max_data_all_size, "Buffer to receive data from each node");
+
+            /* exchange data with other leaders (use our SLURM_STEPID as a port offset value) */
+            size_t recvsize;
+            size_t sendsize = ranks_checked_in * entry_size;
+            pmgr_slurm_exchange_leaders(&leader_tree, segment + node_offset, sendsize,
+                data_all, max_data_all_size, &recvsize
+            );
+
+            /* write ip:port values to table in shared memory, ordered by global rank */
+            size_t offset = 0;
+            int num_ranks = 0;
+            while (offset < recvsize) {
+                int current_rank = *(int*) (data_all + offset);
+                memcpy(segment + table_offset + current_rank * addr_size, data_all + offset + sizeof(int), addr_size);
+                offset += entry_size;
+                num_ranks++;
+            }
+
+            /* set the count of the total number of tasks found across all nodes */
+            memcpy(segment + count_offset, &num_ranks, sizeof(int));
+
+            /* free the buffer used to collect data */
+            pmgr_free(data_all);
+
+            /* stop timer for leader excahgne and print cost */
+            pmgr_gettimeofday(&exchange_end);
+            pmgr_debug(2, "Leader exchange and copy time %f seconds",
+                pmgr_getsecs(&exchange_end, &exchange_start)
             );
         }
-        exit(1);
+
+        /* signal to local procs to indicate that leader exchange is complete */
+        pmgr_slurm_barrier(segment + barrier_offset, max_local, ranks_checked_in, rank_checked_in, -1.0);
+
+        /* check that number of entries matches number of ranks */
+        int table_ranks = *(int*) (segment + count_offset);
+        if (table_ranks == ranks) {
+            /* break late check in loop */
+            have_table = 1;
+        } else {
+            /* try again, maybe some procs were just late to check in */
+            if (rank == 0) {
+                pmgr_debug(1, "Missing some processes after check in, have %d expected %d @ file %s:%d",
+                    table_ranks, ranks, __FILE__, __LINE__
+                );
+            }
+        }
     }
 
-    /* issue barrier to signal that files can be deleted */
-    pmgr_slurm_barrier(segment + barrier_offset, max_local, ranks_checked_in, rank_checked_in);
+    /* if we make it here, we now have the full IP:port table for all procs */
 
-    /* delete the files */
+    /* delete the shared memory files, note the shared memory segment will
+     * still exist even after deleting the files */
     if (slurm_localid == 0) {
         unlink(file_check_in);
         unlink(file_table);
     }
 
-    /* TODO: unmap shared memory segment */
+    /* start time to measure cost to open tree */
+    struct timeval table_start, table_end;
+    pmgr_gettimeofday(&table_start); 
+
+    /* TODO: loop over this attempt since it can timeout before completing */
+    /* now that we have our table, open our tree */
+    pmgr_tree_open_table(t, ranks, rank, segment + table_offset, sockfd, auth);
+
+    /* stop timer to measure cost to open tree and print cost */
+    pmgr_gettimeofday(&table_end);
+    pmgr_debug(2, "Open tree by table time %f seconds for %d procs",
+        pmgr_getsecs(&table_end, &table_start), ranks
+    );
 
     /* close our listening socket */
     if (sockfd >= 0) {
         close(sockfd);
         sockfd = -1;
     }
+
+    /* close the leader tree */
+    if (rank_checked_in == 0) {
+        /* done with the leader tree, so close it down */
+        pmgr_tree_close(&leader_tree);
+    }
+
+    /* issue barrier to signal that shared memory files can be deleted */
+    pmgr_slurm_barrier(segment + barrier_offset, max_local, ranks_checked_in, rank_checked_in, -1.0);
+
+    /* unmap shared memory segment */
+    munmap(segment, (size_t) segment_size);
 
     /* free off strdup'd strings */
     if (prefix != NULL) {

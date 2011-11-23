@@ -156,6 +156,7 @@ int main(int argc, char* argv[])
     check_rbuffer(rbuffer, i*size, i, 0, size, "pmgr_allgather");
   }
 
+#if 0
   /* test pmgr_alltoall */
   init_sbuffer(my_rank);
   init_rbuffer(my_rank);
@@ -167,9 +168,12 @@ int main(int argc, char* argv[])
   for (i = 0; i < ranks; i++) {
     check_rbuffer(rbuffer, i*size, i, my_rank*size, size, "pmgr_alltoall");
   }
+#endif
 
-  int max;
-  if (pmgr_allreducemaxint(&my_rank, &max) != PMGR_SUCCESS) {
+  /* hacky way to invoke allreduce_int64t for timing */
+  int64_t my64  = (int64_t) my_rank;
+  int64_t max64;
+  if (pmgr_allreduce_int64t(&my64, &max64, PMGR_MAX) != PMGR_SUCCESS) {
     printf("Allreducemaxint failed\n");
     exit(1);
   }

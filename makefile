@@ -1,4 +1,7 @@
 OPT ?= -g -O0
+#OPT ?= -g -O1
+#OPT ?= -g -O2
+#OPT ?= -g -O3
 PREFIX ?= /usr/local/tools/pmgr_collective
 
 all: clean
@@ -7,6 +10,7 @@ all: clean
 	cd src && \
 	  gcc $(OPT) -fPIC -Wall -c -o pmgr_collective_common.o pmgr_collective_common.c && \
 	  gcc $(OPT) -fPIC -Wall -c -o pmgr_collective_ranges.o pmgr_collective_ranges.c && \
+	  gcc $(OPT) -fPIC -Wall -c -o pmgr_collective_client_common.o pmgr_collective_client_common.c && \
 	  gcc $(OPT) -fPIC -Wall -c -o pmgr_collective_client_mpirun.o pmgr_collective_client_mpirun.c && \
 	  gcc $(OPT) -fPIC -Wall -c -o pmgr_collective_client_slurm.o  pmgr_collective_client_slurm.c && \
 	  gcc $(OPT) -fPIC -Wall -c -o pmgr_collective_client_tree.o   pmgr_collective_client_tree.c -DHAVE_PMI -I/usr/include/slurm && \
@@ -15,6 +19,7 @@ all: clean
 	  ar rcs libpmgr_collective.a \
 		pmgr_collective_common.o \
 		pmgr_collective_ranges.o \
+		pmgr_collective_client_common.o \
 		pmgr_collective_client_mpirun.o \
 		pmgr_collective_client_tree.o \
 		pmgr_collective_client_slurm.o \
@@ -23,6 +28,7 @@ all: clean
 	  gcc $(OPT) -fPIC -shared -Wl,-soname,libpmgr_collective.so.1 -o libpmgr_collective.so.1.0.1 \
 		pmgr_collective_common.o \
 		pmgr_collective_ranges.o \
+		pmgr_collective_client_common.o \
 		pmgr_collective_client_mpirun.o \
 		pmgr_collective_client_tree.o \
 		pmgr_collective_client_slurm.o \
