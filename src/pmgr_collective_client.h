@@ -38,6 +38,11 @@
 #ifndef _PMGR_COLLECTIVE_CLIENT_H
 #define _PMGR_COLLECTIVE_CLIENT_H
 
+/* enable C++ codes to include this header directly */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include "pmgr_collective_common.h"
 
 /* operation types to use in pmgr_allreduce_int64t */
@@ -114,5 +119,10 @@ int pmgr_allgatherstr(char* sendstr, char*** recvstr, char** recvbuf);
 int pmgr_aggregate(const void* sendbuf, int64_t sendcount,
     void* recvbuf, int64_t recvcount, int64_t* written
 );
+
+/* enable C++ codes to include this header directly */
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
 
 #endif /* _PMGR_COLLECTIVE_CLIENT_H */

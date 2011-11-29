@@ -15,6 +15,13 @@
 mpidir=/usr/global/tools/mpi/checkouts/llnl/1.2-RC1-llnl
 channels="ch_gen2 ch_smp ch_hybrid ch_psm"
 
+cd ${mpidir}
+make distclean
+make quilt
+cd mvapich+chaos
+quilt pop patches/print_src_node_on_next_packet_expected_error.patch #(patch just before remove patch)
+cd ~/packages/pmgr_collective
+
 # pushd $mpidir; make distclean; make quilt; popd
 
 rm -rf tempdir

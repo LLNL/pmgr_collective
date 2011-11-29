@@ -216,6 +216,7 @@ int pmgr_read_fd_timeout(int fd, void* buf, int size, int usecs)
         /* poll the connection with a timeout value */
         int poll_rc = poll(&fds, 1, usecs);
         if (poll_rc < 0) {
+	    if(errno == EINTR || errno == EAGAIN) { continue; }
             pmgr_error("Polling file descriptor for read (read(fd=%d,offset=%x,size=%d) %m errno=%d) @ file %s:%d",
                        fd, offset, size-n, errno, __FILE__, __LINE__
             );

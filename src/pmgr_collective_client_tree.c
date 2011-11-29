@@ -32,7 +32,9 @@
 #include "pmgr_collective_client_tree.h"
 #include "pmgr_collective_client_slurm.h"
 
+#ifdef HAVE_PMI
 #include "pmi.h"
+#endif
 
 /* packet headers for messages in tree */
 #define PMGR_TREE_HEADER_ABORT      (0)
@@ -59,6 +61,11 @@ static int pmgr_write_abort(int fd)
 static int pmgr_write_collective(pmgr_tree_t* t, int fd, void* buf, int size)
 {
     int rc = 0;
+
+    /* check that size is positive */
+    if (size <= 0) {
+        return size;
+    }
 
     /* first write the integer code for a collective message */
     int header = PMGR_TREE_HEADER_COLLECTIVE;
@@ -1197,11 +1204,13 @@ int pmgr_tree_allreduce_int64t(pmgr_tree_t* t, int64_t* sendint, int64_t* recvin
         *recvint = val;
     }
 
+    /* broadcast the result back out to everyone */
     pmgr_tree_bcast(t, recvint, sizeof(int64_t));
 
-    /* check that everyone succeeded */
-    int all_success = pmgr_tree_check(t, 1);
-    return all_success;
+    /* No need to do a tree check here since we do one at end of above bcast */
+    /*pmgr_tree_check(t, 1);*/
+
+    return PMGR_SUCCESS;
 }
 
 /* collects all data from all tasks into recvbuf which is at most max_recvcount bytes big,

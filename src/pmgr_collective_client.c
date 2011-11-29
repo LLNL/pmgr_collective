@@ -57,7 +57,9 @@
 #include "pmgr_collective_client_tree.h"
 #include "pmgr_collective_client_slurm.h"
 
+#ifdef HAVE_PMI
 #include "pmi.h"
+#endif
 
 #define PMGR_DEBUG_LEVELS (3)
 
@@ -203,9 +205,14 @@ int pmgr_barrier()
         if (pmgr_tree_is_open(&pmgr_tree_all)) {
             /* just issue a check tree using success */
             rc = pmgr_tree_check(&pmgr_tree_all, 1);
-        } else {
+        } else if (pmgr_mpirun_is_open()) {
             /* trees aren't enabled, use mpirun to do barrier */
             rc = pmgr_mpirun_barrier();
+        } else {
+            pmgr_error("No method to communication with other procs @ file %s:%d",
+                __FILE__, __LINE__
+            );
+            return PMGR_FAILURE;
         }
     }
     /* if there is no mpirun_process, this is just a barrier over a single client process */
@@ -317,8 +324,13 @@ int pmgr_bcast(void* buf, int sendcount, int root)
         /* (this is a common case) */
         if (root == 0 && pmgr_tree_is_open(&pmgr_tree_all)) {
             rc = pmgr_tree_bcast(&pmgr_tree_all, buf, sendcount);
-        } else {
+        } else if (pmgr_mpirun_is_open()) {
             rc = pmgr_mpirun_bcast(buf, sendcount, root);
+        } else {
+            pmgr_error("No method to communication with other procs @ file %s:%d",
+                __FILE__, __LINE__
+            );
+            return PMGR_FAILURE;
         }
     }
     /* if there is no mpirun process, the root is the only process, so there's nothing to do */
@@ -360,8 +372,13 @@ int pmgr_gather(void* sendbuf, int sendcount, void* recvbuf, int root)
         /* (this is a common case) */
         if (root == 0 && pmgr_tree_is_open(&pmgr_tree_all)) {
             rc = pmgr_tree_gather(&pmgr_tree_all, sendbuf, sendcount, recvbuf);
-        } else {
+        } else if (pmgr_mpirun_is_open()) {
             rc = pmgr_mpirun_gather(sendbuf, sendcount, recvbuf, root);
+        } else {
+            pmgr_error("No method to communication with other procs @ file %s:%d",
+                __FILE__, __LINE__
+            );
+            return PMGR_FAILURE;
         }
     } else {
         /* just a single process, just copy the data over */
@@ -405,8 +422,13 @@ int pmgr_scatter(void* sendbuf, int sendcount, void* recvbuf, int root)
         /* (this is a common case) */
         if (root == 0 && pmgr_tree_is_open(&pmgr_tree_all)) {
             rc = pmgr_tree_scatter(&pmgr_tree_all, sendbuf, sendcount, recvbuf);
-        } else {
+        } else if (pmgr_mpirun_is_open()) {
             rc = pmgr_mpirun_scatter(sendbuf, sendcount, recvbuf, root);
+        } else {
+            pmgr_error("No method to communication with other procs @ file %s:%d",
+                __FILE__, __LINE__
+            );
+            return PMGR_FAILURE;
         }
     } else {
         /* just a single process, just copy the data over */
@@ -458,9 +480,14 @@ int pmgr_allgather(void* sendbuf, int sendcount, void* recvbuf)
             if (tmp_rc != PMGR_SUCCESS) {
               rc = tmp_rc;
             }
-        } else {
+        } else if (pmgr_mpirun_is_open()) {
             /* trees aren't enabled, use mpirun to do allgather */
             rc = pmgr_mpirun_allgather(sendbuf, sendcount, recvbuf);
+        } else {
+            pmgr_error("No method to communication with other procs @ file %s:%d",
+                __FILE__, __LINE__
+            );
+            return PMGR_FAILURE;
         }
     } else {
         /* just a single process, just copy the data over */
@@ -501,8 +528,13 @@ int pmgr_alltoall(void* sendbuf, int sendcount, void* recvbuf)
     if (pmgr_nprocs > 1) {
         if (pmgr_tree_is_open(&pmgr_tree_all)) {
             rc = pmgr_tree_alltoall(&pmgr_tree_all, sendbuf, sendcount, recvbuf);
-        } else {
+        } else if (pmgr_mpirun_is_open()) {
             rc = pmgr_mpirun_alltoall(sendbuf, sendcount, recvbuf);
+        } else {
+            pmgr_error("No method to communication with other procs @ file %s:%d",
+                __FILE__, __LINE__
+            );
+            return PMGR_FAILURE;
         }
     } else {
         /* just a single process, just copy the data over */
@@ -696,7 +728,14 @@ int pmgr_open()
             }
 
             /* now open our tree */
-            pmgr_tree_open(&pmgr_tree_all, pmgr_nprocs, pmgr_me, auth_text);
+            if (pmgr_tree_open(&pmgr_tree_all, pmgr_nprocs, pmgr_me, auth_text) != PMGR_SUCCESS) {
+              exit(1);
+            }
+
+            /* close off our N-to-1 connections to srun if we opened them */
+            if (pmgr_mpirun_is_open()) {
+                pmgr_mpirun_close();
+            }
         }
     }
     /* just a single process, we don't need to open a connection here */
