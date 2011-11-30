@@ -20,7 +20,9 @@ make distclean
 make quilt
 cd mvapich+chaos
 quilt pop patches/print_src_node_on_next_packet_expected_error.patch #(patch just before remove patch)
+
 cd ~/packages/pmgr_collective
+make clean
 
 # pushd $mpidir; make distclean; make quilt; popd
 

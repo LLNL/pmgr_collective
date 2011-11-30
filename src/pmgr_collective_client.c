@@ -890,9 +890,35 @@ int pmgr_init(int *argc_p, char ***argv_p, int *np_p, int *me_p, int *id_p)
     if ((value = pmgr_getenv("MPIRUN_SHM_ENABLE", ENV_OPTIONAL))) {
         mpirun_shm_enable = atoi(value);
     }
+
     /* minimum number of tasks to switch to /dev/shm */
     if ((value = pmgr_getenv("MPIRUN_SHM_THRESHOLD", ENV_OPTIONAL))) {
         mpirun_shm_threshold = atoi(value);
+    }
+
+    /* total time to attempt to connect to a host before aborting (seconds) */
+    if ((value = pmgr_getenv("MPIRUN_PORT_SCAN_TIMEOUT", ENV_OPTIONAL))) {
+        mpirun_port_scan_timeout = atoi(value);
+    }
+
+    /* time to wait on connect call before giving up (millisecs) */
+    if ((value = pmgr_getenv("MPIRUN_PORT_SCAN_CONNECT_TIMEOUT", ENV_OPTIONAL))) {
+        mpirun_port_scan_connect_timeout = atoi(value);
+    }
+
+    /* number of times to attempt connect call to given IP:port */
+    if ((value = pmgr_getenv("MPIRUN_PORT_SCAN_CONNECT_ATTEMPTS", ENV_OPTIONAL))) {
+        mpirun_port_scan_connect_attempts = atoi(value);
+    }
+
+    /* time to wait between making consecutive connect attempts to a given IP:port (millisecs) */
+    if ((value = pmgr_getenv("MPIRUN_PORT_SCAN_CONNECT_SLEEP", ENV_OPTIONAL))) {
+        mpirun_port_scan_connect_sleep = atoi(value);
+    }
+
+    /* time to wait for a reply when authenticating a new connection (miilisecs) */
+    if ((value = pmgr_getenv("MPIRUN_PORT_SCAN_AUTHENTICATE_TIMEOUT", ENV_OPTIONAL))) {
+        mpirun_port_scan_authenticate_timeout = atoi(value);
     }
 
     /* initialize PMI library if we're using it, and get rank, ranks, and jobid from PMI */
