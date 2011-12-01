@@ -39,11 +39,13 @@ extern int mpirun_connect_random;
 
 extern unsigned pmgr_backoff_rand_seed;
 
+extern int mpirun_authenticate_enable;
+extern int mpirun_authenticate_timeout;
+
 extern int mpirun_port_scan_timeout;
 extern int mpirun_port_scan_connect_timeout;
 extern int mpirun_port_scan_connect_attempts;
 extern int mpirun_port_scan_connect_sleep;
-extern int mpirun_port_scan_authenticate_timeout;
 
 extern int mpirun_open_timeout;
 extern struct timeval time_open;
@@ -351,6 +353,11 @@ int pmgr_authenticate_accept(int fd, const char* auth_connect, const char* auth_
 {
     int test_failed = 0;
 
+    /* return right away with success if authentication is disabled */
+    if (!mpirun_authenticate_enable) {
+        return PMGR_SUCCESS;
+    }
+
     /* get size of connect text */
     uint32_t auth_connect_len = 0;
     if (auth_connect != NULL) {
@@ -488,6 +495,11 @@ int pmgr_authenticate_accept(int fd, const char* auth_connect, const char* auth_
 int pmgr_authenticate_connect(int fd, const char* auth_connect, const char* auth_accept, int reply_timeout)
 {
     int test_failed = 0;
+
+    /* return right away with success if authentication is disabled */
+    if (!mpirun_authenticate_enable) {
+        return PMGR_SUCCESS;
+    }
 
     /* get size of connect text */
     uint32_t auth_connect_len = 0;
@@ -634,7 +646,7 @@ int pmgr_connect_hostname(
     int timeout  = mpirun_port_scan_connect_timeout;
     int attempts = mpirun_port_scan_connect_attempts;
     int sleep    = mpirun_port_scan_connect_sleep * 1000; /* convert msecs to usecs */
-    int reply_timeout = mpirun_port_scan_authenticate_timeout * 1000; /* convert msecs to usecs */
+    int reply_timeout = mpirun_authenticate_timeout;
     int suppress = 3;
 
     /* lookup host address by name */

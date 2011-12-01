@@ -201,7 +201,7 @@ int pmgr_write_fd(int fd, const void* buf, int size)
 }
 
 /* read size bytes into buf from fd, retry if necessary */
-int pmgr_read_fd_timeout(int fd, void* buf, int size, int usecs)
+int pmgr_read_fd_timeout(int fd, void* buf, int size, int msecs)
 {
     int rc;
     int n = 0;
@@ -214,7 +214,7 @@ int pmgr_read_fd_timeout(int fd, void* buf, int size, int usecs)
 
     while (n < size) {
         /* poll the connection with a timeout value */
-        int poll_rc = poll(&fds, 1, usecs);
+        int poll_rc = poll(&fds, 1, msecs);
         if (poll_rc < 0) {
 	    if(errno == EINTR || errno == EAGAIN) { continue; }
             pmgr_error("Polling file descriptor for read (read(fd=%d,offset=%x,size=%d) %m errno=%d) @ file %s:%d",

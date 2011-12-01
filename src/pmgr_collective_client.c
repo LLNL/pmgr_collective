@@ -94,8 +94,11 @@
 #ifndef MPIRUN_PORT_SCAN_CONNECT_SLEEP      /* time to sleep between consecutive connect calls */
 #define MPIRUN_PORT_SCAN_CONNECT_SLEEP (10) /* millisecs */
 #endif
-#ifndef MPIRUN_PORT_SCAN_AUTHENTICATE_TIMEOUT      /* time to wait for read to complete after making connection */
-#define MPIRUN_PORT_SCAN_AUTHENTICATE_TIMEOUT (20) /* milliseconds */
+#ifndef MPIRUN_AUTHENTICATE_ENABLE
+#define MPIRUN_AUTHENTICATE_ENABLE (1)
+#endif
+#ifndef MPIRUN_AUTHENTICATE_TIMEOUT        /* time to wait for read to complete after making connection */
+#define MPIRUN_AUTHENTICATE_TIMEOUT (5000) /* milliseconds */
 #endif
 
 /* set env variable whether to use trees */
@@ -130,12 +133,15 @@ int mpirun_connect_random   = MPIRUN_CONNECT_RANDOM;
 
 unsigned pmgr_backoff_rand_seed;
 
+/* time to wait for replies while authenticating connections */
+int mpirun_authenticate_enable  = MPIRUN_AUTHENTICATE_ENABLE;
+int mpirun_authenticate_timeout = MPIRUN_AUTHENTICATE_TIMEOUT;
+
 /* parameters for connection attempts when conduction a port scan */
 int mpirun_port_scan_timeout              = MPIRUN_PORT_SCAN_TIMEOUT;
 int mpirun_port_scan_connect_timeout      = MPIRUN_PORT_SCAN_CONNECT_TIMEOUT;
 int mpirun_port_scan_connect_attempts     = MPIRUN_PORT_SCAN_CONNECT_ATTEMPTS;
 int mpirun_port_scan_connect_sleep        = MPIRUN_PORT_SCAN_CONNECT_SLEEP;
-int mpirun_port_scan_authenticate_timeout = MPIRUN_PORT_SCAN_AUTHENTICATE_TIMEOUT;
 
 /* set envvar MPIRUN_USE_TREES={0,1} to disable/enable tree algorithms */
 static int mpirun_use_trees = MPIRUN_USE_TREES;
@@ -896,6 +902,16 @@ int pmgr_init(int *argc_p, char ***argv_p, int *np_p, int *me_p, int *id_p)
         mpirun_shm_threshold = atoi(value);
     }
 
+    /* whether to authenticate connections */
+    if ((value = pmgr_getenv("MPIRUN_AUTHENTICATE_ENABLE", ENV_OPTIONAL))) {
+        mpirun_authenticate_enable = atoi(value);
+    }
+
+    /* time to wait for a reply when authenticating a new connection (miilisecs) */
+    if ((value = pmgr_getenv("MPIRUN_AUTHENTICATE_TIMEOUT", ENV_OPTIONAL))) {
+        mpirun_authenticate_timeout = atoi(value);
+    }
+
     /* total time to attempt to connect to a host before aborting (seconds) */
     if ((value = pmgr_getenv("MPIRUN_PORT_SCAN_TIMEOUT", ENV_OPTIONAL))) {
         mpirun_port_scan_timeout = atoi(value);
@@ -914,11 +930,6 @@ int pmgr_init(int *argc_p, char ***argv_p, int *np_p, int *me_p, int *id_p)
     /* time to wait between making consecutive connect attempts to a given IP:port (millisecs) */
     if ((value = pmgr_getenv("MPIRUN_PORT_SCAN_CONNECT_SLEEP", ENV_OPTIONAL))) {
         mpirun_port_scan_connect_sleep = atoi(value);
-    }
-
-    /* time to wait for a reply when authenticating a new connection (miilisecs) */
-    if ((value = pmgr_getenv("MPIRUN_PORT_SCAN_AUTHENTICATE_TIMEOUT", ENV_OPTIONAL))) {
-        mpirun_port_scan_authenticate_timeout = atoi(value);
     }
 
     /* initialize PMI library if we're using it, and get rank, ranks, and jobid from PMI */

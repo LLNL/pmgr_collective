@@ -43,6 +43,7 @@
 extern int mpirun_pmi_enable;
 extern int mpirun_shm_enable;
 extern int mpirun_shm_threshold;
+extern int mpirun_authenticate_timeout;
 
 /* write an abort packet across socket */
 static int pmgr_write_abort(int fd)
@@ -72,8 +73,8 @@ static int pmgr_write_collective(pmgr_tree_t* t, int fd, void* buf, int size)
     rc = pmgr_write_fd(fd, &header, sizeof(int));
     if (rc < sizeof(int)) {
         /* the write failed, close the socket, and return an error */
-        pmgr_error("Failed to write collective packet header @ file %s:%d",
-            __FILE__, __LINE__
+        pmgr_error("Failed to write collective packet header rc=%d @ file %s:%d",
+            rc, __FILE__, __LINE__
         );
         return rc;
     }
@@ -82,8 +83,8 @@ static int pmgr_write_collective(pmgr_tree_t* t, int fd, void* buf, int size)
     rc = pmgr_write_fd(fd, buf, size);
     if (rc < size) {
         /* the write failed, close the socket, and return an error */
-        pmgr_error("Failed to write collective packet data @ file %s:%d",
-            __FILE__, __LINE__
+        pmgr_error("Failed to write collective packet data rc=%d @ file %s:%d",
+            rc, __FILE__, __LINE__
         );
         return rc;
     }
@@ -111,8 +112,8 @@ static int pmgr_read_collective(pmgr_tree_t* t, int fd, void* buf, int size)
     rc = pmgr_read_fd(fd, &header, sizeof(int));
     if (rc <= 0) {
         /* failed to read packet header, print error, close socket, and return error */
-        pmgr_error("Failed to read packet header @ file %s:%d",
-            __FILE__, __LINE__
+        pmgr_error("Failed to read packet header rc=%d @ file %s:%d",
+            rc, __FILE__, __LINE__
         );
         return rc;
     }
@@ -123,8 +124,8 @@ static int pmgr_read_collective(pmgr_tree_t* t, int fd, void* buf, int size)
         rc = pmgr_read_fd(fd, buf, size);
         if (rc <= 0) {
             /* failed to read data from socket, print error, close socket, and return error */
-            pmgr_error("Failed to read collective packet data @ file %s:%d",
-                __FILE__, __LINE__
+            pmgr_error("Failed to read collective packet data rc=%d @ file %s:%d",
+                rc, __FILE__, __LINE__
             );
             return rc;
         }
@@ -153,8 +154,7 @@ static int pmgr_connect_child(struct in_addr ip, int port, const char* auth)
         fd = pmgr_connect(ip, port);
         if (fd >= 0) {
             /* connected to something, check that it's who we expected to connect to */
-            if (pmgr_authenticate_connect(fd, auth, auth, 100)
-                != PMGR_SUCCESS)
+            if (pmgr_authenticate_connect(fd, auth, auth, mpirun_authenticate_timeout) != PMGR_SUCCESS)
             {
                 /* authentication failed, close this socket and try again, we connected
                  * to the right process, but perhaps we just authenticated too slowly */
@@ -175,8 +175,7 @@ static int pmgr_accept_parent(int sockfd, struct sockaddr* addr, socklen_t* len,
         fd = accept(sockfd, addr, len);
         if (fd >= 0) {
             /* connected to something, check that it's who we expected to connect to */
-            if (pmgr_authenticate_accept(fd, auth, auth, 100)
-                != PMGR_SUCCESS)
+            if (pmgr_authenticate_accept(fd, auth, auth, mpirun_authenticate_timeout) != PMGR_SUCCESS)
             {
                 /* authentication failed, close this socket and accept a new connection */
                 close(fd);

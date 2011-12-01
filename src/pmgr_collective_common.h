@@ -114,7 +114,7 @@ int pmgr_write_fd_suppress(int fd, const void* buf, int size, int suppress);
 int pmgr_write_fd(int fd, const void* buf, int size);
 
 /* read size bytes into buf from fd, retry if necessary */
-int pmgr_read_fd_timeout(int fd, void* buf, int size, int usecs);
+int pmgr_read_fd_timeout(int fd, void* buf, int size, int msecs);
 
 /* read size bytes into buf from fd, retry if necessary */
 int pmgr_read_fd(int fd, void* buf, int size);

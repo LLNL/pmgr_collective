@@ -10,6 +10,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/mman.h>
+#include <sched.h>
 
 #include "pmgr_collective_client.h"
 #include "pmgr_collective_ranges.h"
@@ -221,7 +222,10 @@ static void pmgr_slurm_barrier_signal(volatile void* buf, int ranks, int rank)
         /* wait until all procs have set their field to 1 */
         for (i = 1; i < ranks; i++) { 
             while (mem[i] == 0) {
-                ; /* MEM_READ_SYNC */
+                /* make room for another process to run in case we're oversubscribed */
+                sched_yield();
+
+                /* MEM_READ_SYNC */
             }
         }
 
@@ -254,6 +258,7 @@ static int pmgr_slurm_barrier_wait(volatile void* buf, int ranks, int rank, doub
         struct timeval start, end;
         pmgr_gettimeofday(&start); 
         while (mem[rank] == 0) {
+            /* check whether we've exceeded our time limit */
             if (timelimit > 0.0) {
                 pmgr_gettimeofday(&end);
                 double waited = pmgr_getsecs(&end, &start);
@@ -262,6 +267,10 @@ static int pmgr_slurm_barrier_wait(volatile void* buf, int ranks, int rank, doub
                     break;
                 }
             }
+
+            /* make room for another process to run in case we're oversubscribed */
+            sched_yield();
+
             /* MEM_READ_SYNC */
         }
 
