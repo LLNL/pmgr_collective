@@ -221,6 +221,51 @@ int pmgr_connect(struct in_addr ip, int port)
     return fd;
 }
 
+/* accept a connection, authenticate it, and extract remote IP and port info from socket */
+int pmgr_accept(int sockfd, const char* auth, int* out_fd, struct in_addr* out_ip, short* out_port)
+{
+    /* wait until we have a valid open socket descriptor */
+    int fd = -1;
+    while (fd == -1) {
+        /* accept an incoming connection request */
+        struct sockaddr incoming_addr;
+        socklen_t incoming_len = sizeof(incoming_addr);
+        fd = accept(sockfd, &incoming_addr, &incoming_len);
+        if (fd >= 0) {
+            /* connected to something, check that it's who we expected to connect to */
+            if (pmgr_authenticate_accept(fd, auth, auth, mpirun_authenticate_timeout) == PMGR_SUCCESS) {
+                /* connection checks out, now lookup remote address info */
+                struct sockaddr_in sin;
+                memset(&sin, 0, sizeof(sin));
+                socklen_t len = sizeof(sin);
+                if (getpeername(fd, (struct sockaddr *) &sin, &len) == 0) {
+                    /* extract remote IP and port */
+                    struct in_addr ip = sin.sin_addr;
+                    short port = ntohs(sin.sin_port);
+
+                    /* fill in IP and port, and return new file descriptor */
+                    *out_fd   = fd;
+                    *out_ip   = ip;
+                    *out_port = port;
+                    break;
+                } else {
+                    pmgr_error("Extracting remote IP and port (getpeername() %m errno=%d) @ file %s:%d",
+                        errno, __FILE__, __LINE__
+                    );
+                    return PMGR_FAILURE;
+                }
+            } else {
+                /* authentication failed, close this socket and accept a new connection */
+                close(fd);
+                fd = -1;
+            }
+        } else {
+            /* error from accept, try again */
+        }
+    }
+    return PMGR_SUCCESS;
+}
+
 /* open a listening socket and return the descriptor, the ip address, and the port */
 int pmgr_open_listening_socket(const char* portrange, int portoffset, int* out_fd, struct in_addr* out_ip, short* out_port)
 {
@@ -250,7 +295,7 @@ int pmgr_open_listening_socket(const char* portrange, int portoffset, int* out_f
         }
 
         /* set the socket to listen for connections */
-        if (listen(sockfd, 1) < 0) {
+        if (listen(sockfd, 2) < 0) {
             pmgr_error("Setting parent socket to listen (listen() %m errno=%d) @ file %s:%d",
                 errno, __FILE__, __LINE__
             );
@@ -299,7 +344,7 @@ int pmgr_open_listening_socket(const char* portrange, int portoffset, int* out_f
             }
 
             /* set the socket to listen for connections */
-            if (listen(sockfd, 1) < 0) {
+            if (listen(sockfd, 2) < 0) {
                 pmgr_debug(2, "Setting parent socket to listen (listen() %m errno=%d) port=%d @ file %s:%d",
                     errno, port, __FILE__, __LINE__
                 );
@@ -637,17 +682,18 @@ int pmgr_authenticate_connect(int fd, const char* auth_connect, const char* auth
 
 /* Attempts to connect to a given hostname using a port list and timeouts */
 int pmgr_connect_hostname(
-    int rank, const char* hostname, const char* portrange, int portoffset, struct in_addr* out_ip, short* out_port,
-    const char* auth_connect, const char* auth_accept)
+    int rank, const char* hostname, const char* portrange, int portoffset,
+    const char* auth_connect, const char* auth_accept,
+    int* out_fd, struct in_addr* out_ip, short* out_port)
 {
     int s = -1;
 
-    double timelimit = (double) mpirun_port_scan_timeout; /* seconds */
-    int timeout  = mpirun_port_scan_connect_timeout;
-    int attempts = mpirun_port_scan_connect_attempts;
-    int sleep    = mpirun_port_scan_connect_sleep * 1000; /* convert msecs to usecs */
+    double timelimit  = (double) mpirun_port_scan_timeout; /* seconds */
+    int timeout       = mpirun_port_scan_connect_timeout;
+    int attempts      = mpirun_port_scan_connect_attempts;
+    int sleep         = mpirun_port_scan_connect_sleep * 1000; /* convert msecs to usecs */
     int reply_timeout = mpirun_authenticate_timeout;
-    int suppress = 3;
+    int suppress      = 3;
 
     /* lookup host address by name */
     struct hostent* he = gethostbyname(hostname);
@@ -655,7 +701,7 @@ int pmgr_connect_hostname(
         pmgr_error("Hostname lookup failed (gethostbyname(%s) %s h_errno=%d) @ file %s:%d",
                    hostname, hstrerror(h_errno), h_errno, __FILE__, __LINE__
         );
-        return s;
+        return PMGR_FAILURE;
     }
 
     /* set ip address */
@@ -745,11 +791,12 @@ int pmgr_connect_hostname(
                    he->h_name, inet_ntoa(ip),
                    __FILE__, __LINE__
         );
+        return PMGR_FAILURE;
     } else {
         /* inform caller of ip address and port that we're connected to */
+        *out_fd   = s;
         *out_ip   = ip;
         *out_port = (short) port;
+        return PMGR_SUCCESS;
     }
-
-    return s;
 }

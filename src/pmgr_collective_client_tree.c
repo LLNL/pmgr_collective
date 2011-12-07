@@ -44,6 +44,117 @@ extern int mpirun_pmi_enable;
 extern int mpirun_shm_enable;
 extern int mpirun_shm_threshold;
 extern int mpirun_authenticate_timeout;
+extern int mpirun_connect_down;
+
+/* construct name in format "rank %d of %d" */
+static int pmgr_tree_build_name_rank(int rank, int ranks, char** out_name)
+{
+    /* free existing string if any */
+    if (*out_name != NULL) {
+        free(*out_name);
+        *out_name = NULL;
+    }
+
+    char name_format[] = "rank %d of %d";
+
+    /* get number of bytes, be sure to include a byte for trailing NUL */
+    int name_len = snprintf(NULL, 0, name_format, rank, ranks) + 1;
+
+    /* allocate memory */
+    char* name = NULL;
+    if (name_len > 0) {
+        name = (char*) malloc(name_len);
+    }
+
+    /* check that we allocated memory ok */
+    if (name == NULL) {
+        return PMGR_FAILURE;
+    }
+
+    /* write the format */
+    snprintf(name, name_len, name_format, rank, ranks);
+
+    /* save newly allocated string in user's pointer */
+    *out_name = name;
+
+    return PMGR_SUCCESS;
+}
+
+static int pmgr_tree_build_name_child_rank(pmgr_tree_t* t, int i)
+{
+    /* build the new name */
+    pmgr_tree_build_name_rank(t->child_rank[i], t->ranks, &(t->child_name[i]));
+
+    return PMGR_SUCCESS;
+}
+
+static int pmgr_tree_build_name_parent_rank(pmgr_tree_t* t)
+{
+    /* build the new name */
+    pmgr_tree_build_name_rank(t->parent_rank, t->ranks, &(t->parent_name));
+
+    return PMGR_SUCCESS;
+}
+
+/* construct name in format "rank %d of %d at IP:port" */
+static int pmgr_tree_build_name_ip(int rank, int ranks, struct in_addr ip, short port, const char* host, char** out_name)
+{
+    /* free existing string if any */
+    if (*out_name != NULL) {
+        free(*out_name);
+        *out_name = NULL;
+    }
+
+    char name_without_host[] = "rank %d of %d at %s:%u";
+    char name_with_host[]    = "rank %d of %d at %s:%u on %s";
+
+    /* get number of bytes, be sure to include a byte for trailing NUL */
+    int name_len = 0;
+    if (host == NULL) {
+        name_len = snprintf(NULL, 0, name_without_host, rank, ranks, inet_ntoa(ip), (unsigned short) port) + 1;
+    } else {
+        name_len = snprintf(NULL, 0, name_with_host, rank, ranks, inet_ntoa(ip), (unsigned short) port, host) + 1;
+    }
+
+    /* allocate memory */
+    char* name = NULL;
+    if (name_len > 0) {
+        name = (char*) malloc(name_len);
+    }
+
+    /* check that we allocated memory ok */
+    if (name == NULL) {
+        return PMGR_FAILURE;
+    }
+
+    /* write the format */
+    if (host == NULL) {
+        snprintf(name, name_len, name_without_host, rank, ranks, inet_ntoa(ip), (unsigned short) port);
+    } else {
+        snprintf(name, name_len, name_with_host, rank, ranks, inet_ntoa(ip), (unsigned short) port, host);
+    }
+
+    /* save newly allocated string in user's pointer */
+    *out_name = name;
+
+    return PMGR_SUCCESS;
+}
+
+static int pmgr_tree_build_child_name_ip(pmgr_tree_t* t, int i)
+{
+    /* build the new name */
+    pmgr_tree_build_name_ip(t->child_rank[i], t->ranks, t->child_ip[i], t->child_port[i], t->child_host[i], &(t->child_name[i]));
+
+    return PMGR_SUCCESS;
+}
+
+static int pmgr_tree_build_parent_name_ip(pmgr_tree_t* t)
+{
+    /* build the new name */
+    pmgr_tree_build_name_ip(t->parent_rank, t->ranks, t->parent_ip, t->parent_port, t->parent_host, &(t->parent_name));
+
+    return PMGR_SUCCESS;
+}
 
 /* write an abort packet across socket */
 static int pmgr_write_abort(int fd)
@@ -146,16 +257,135 @@ static int pmgr_read_collective(pmgr_tree_t* t, int fd, void* buf, int size)
     return rc;
 }
 
-/* issue a connect to a child, and verify that we really connected to who we should */
-static int pmgr_connect_child(struct in_addr ip, int port, const char* auth)
+        
+static int pmgr_connect_child(struct in_addr connect_ip, int connect_port, const char* auth)
 {
     int fd = -1;
     while (fd == -1) {
-        fd = pmgr_connect(ip, port);
+        fd = pmgr_connect(connect_ip, connect_port);
         if (fd >= 0) {
             /* connected to something, check that it's who we expected to connect to */
-            if (pmgr_authenticate_connect(fd, auth, auth, mpirun_authenticate_timeout) != PMGR_SUCCESS)
-            {
+            if (pmgr_authenticate_connect(fd, auth, auth, mpirun_authenticate_timeout) != PMGR_SUCCESS) {
+                close(fd);
+                fd = -1;
+            }
+        }
+    }
+    return fd;
+}
+
+/* send our rank to our parent (so it knows which child we are) and receive its rank */
+static int pmgr_wireup_connect_parent_exchange(int fd, pmgr_tree_t* t)
+{
+    /* read rank of other end */
+    int connected_rank;
+    if (pmgr_read_collective(t, fd, &connected_rank, sizeof(int)) < 0) {
+        /* failed to read rank */
+        pmgr_error("%s failed to read rank of parent %s @ file %s:%d",
+            t->name, t->parent_name, __FILE__, __LINE__
+        );
+        return PMGR_FAILURE;
+    }
+
+    /* write our rank to let other end who we are */
+    pmgr_write_collective(t, fd, &(t->rank), sizeof(int));
+
+    /* check that we connected to the right rank */
+    if (connected_rank != t->parent_rank) {
+        /* connected to the wrong rank */
+        pmgr_error("%s rank of parent %d does not match expected rank %d from %s @ file %s:%d",
+            t->name, connected_rank, t->parent_rank, t->parent_name, __FILE__, __LINE__
+        );
+        return PMGR_FAILURE;
+    }
+
+    /* read length of parent's hostname */
+    int remote_host_len;
+    if (pmgr_read_collective(t, fd, &remote_host_len, sizeof(int)) < 0) {
+        /* failed to read host length */
+        pmgr_error("%s failed to read hostlength of parent %s @ file %s:%d",
+            t->name, t->parent_name, __FILE__, __LINE__
+        );
+        return PMGR_FAILURE;
+    }
+
+    /* read parent's hostname */
+    char* remote_host = NULL;
+    if (remote_host_len > 0) {
+        /* allocate space to receive hostname */
+        remote_host = pmgr_malloc(remote_host_len, "Remote hostname");
+        if (pmgr_read_collective(t, fd, remote_host, remote_host_len) < 0) {
+            /* failed to read host length */
+            pmgr_error("%s failed to read hostname of parent %s @ file %s:%d",
+                t->name, t->parent_name, __FILE__, __LINE__
+            );
+            free(remote_host);
+            return PMGR_FAILURE;
+        }
+    }
+
+    /* send our hostname */
+    int host_len = 0;
+    if (t->host != NULL) {
+        host_len = strlen(t->host) + 1;
+    }
+    pmgr_write_collective(t, fd, &host_len, sizeof(int));
+    if (host_len > 0) {
+        pmgr_write_collective(t, fd, t->host, host_len);
+    }
+
+    /* connection checks out, now lookup remote address info */
+    struct sockaddr_in sin;
+    memset(&sin, 0, sizeof(sin));
+    socklen_t len = sizeof(sin);
+    if (getpeername(fd, (struct sockaddr *) &sin, &len) == 0) {
+        /* extract remote IP and port */
+        struct in_addr remote_ip = sin.sin_addr;
+        short remote_port = ntohs(sin.sin_port);
+
+        /* fill in IP and port, and return new file descriptor */
+        t->parent_fd   = fd;
+        t->parent_ip   = remote_ip;
+        t->parent_port = remote_port;
+        t->parent_host = remote_host;
+
+        /* rebuild parent name using remote ip and port */
+        pmgr_tree_build_parent_name_ip(t);
+    } else {
+        pmgr_error("Extracting remote IP and port (getpeername() %m errno=%d) @ file %s:%d",
+            errno, __FILE__, __LINE__
+        );
+        pmgr_free(remote_host);
+        return PMGR_FAILURE;
+    }
+
+    /* we don't free remote host here, because we assigned it over to t->parent_host, which will be freed later */
+    /*pmgr_free(remote_host)*/
+
+    return PMGR_SUCCESS;
+}
+
+/* issue a connect to a child, and verify that we really connected to who we should */
+static int pmgr_wireup_connect_parent_direct(struct in_addr connect_ip, int connect_port, pmgr_tree_t* t, const char* auth)
+{
+    /* attempt to connect to specified IP and port */
+    int fd = -1;
+    while (fd == -1) {
+        fd = pmgr_connect(connect_ip, connect_port);
+        if (fd >= 0) {
+            /* connected to something, check that it's who we expected to connect to */
+            if (pmgr_authenticate_connect(fd, auth, auth, mpirun_authenticate_timeout) == PMGR_SUCCESS) {
+                /* we've authenticated our connection, now exchange ranks with our parent process,
+                 * so it knows which child we are */
+                if (pmgr_wireup_connect_parent_exchange(fd, t) != PMGR_SUCCESS) {
+                    pmgr_error("%s failed to exchcange ranks with parent %s @ file %s:%d",
+                        t->name, t->parent_name, __FILE__, __LINE__
+                    );
+                    close(fd);
+                    fd = -1;
+                    return PMGR_FAILURE;
+                }
+            } else {
                 /* authentication failed, close this socket and try again, we connected
                  * to the right process, but perhaps we just authenticated too slowly */
                 close(fd);
@@ -165,27 +395,100 @@ static int pmgr_connect_child(struct in_addr ip, int port, const char* auth)
             /* error from connect */
         }
     }
-    return fd;
+    return PMGR_SUCCESS;
 }
 
-static int pmgr_accept_parent(int sockfd, struct sockaddr* addr, socklen_t* len, const char* auth)
+/* accept connections from all of our children */
+static int pmgr_wireup_accept_children(int listenfd, pmgr_tree_t* t, const char* auth)
 {
-    int fd = -1;
-    while (fd == -1) {
-        fd = accept(sockfd, addr, len);
-        if (fd >= 0) {
-            /* connected to something, check that it's who we expected to connect to */
-            if (pmgr_authenticate_accept(fd, auth, auth, mpirun_authenticate_timeout) != PMGR_SUCCESS)
-            {
-                /* authentication failed, close this socket and accept a new connection */
+    /* determine how many children will be connecting */
+    int count = t->num_child;
+    while (count > 0) {
+        /* accept a connection */
+        int fd;
+        struct in_addr remote_ip;
+        short remote_port;
+        if (pmgr_accept(listenfd, auth, &fd, &remote_ip, &remote_port) == PMGR_SUCCESS) {
+            /* write our rank to let child know who it connected to */
+            pmgr_write_collective(t, fd, &(t->rank), sizeof(int));
+
+            /* send our hostname */
+            int host_len = 0;
+            if (t->host != NULL) {
+                host_len = strlen(t->host) + 1;
+            }
+            pmgr_write_collective(t, fd, &host_len, sizeof(int));
+            if (host_len > 0) {
+                pmgr_write_collective(t, fd, t->host, host_len);
+            }
+
+            /* read rank of child */
+            int rank;
+            if (pmgr_read_collective(t, fd, &rank, sizeof(int)) < 0) {
+                /* failed to read rank */
                 close(fd);
-                fd = -1;
+                return PMGR_FAILURE;
+            }
+
+            /* read length of child's hostname */
+            int remote_host_len;
+            if (pmgr_read_collective(t, fd, &remote_host_len, sizeof(int)) < 0) {
+                /* failed to read host length */
+                pmgr_error("%s failed to read hostlength of parent %s @ file %s:%d",
+                    t->name, t->parent_name, __FILE__, __LINE__
+                );
+                return PMGR_FAILURE;
+            }
+
+            /* read child's hostname */
+            char* remote_host = NULL;
+            if (remote_host_len > 0) {
+                /* allocate space to receive hostname */
+                remote_host = pmgr_malloc(remote_host_len, "Remote hostname");
+                if (pmgr_read_collective(t, fd, remote_host, remote_host_len) < 0) {
+                    /* failed to read host length */
+                    pmgr_error("%s failed to read hostname of parent %s @ file %s:%d",
+                        t->name, t->parent_name, __FILE__, __LINE__
+                    );
+                    free(remote_host);
+                    return PMGR_FAILURE;
+                }
+            }
+
+            /* scan our array to determine which child we accepted */
+            int i;
+            int index = -1;
+            for (i = 0; i < t->num_child; i++) {
+                if (t->child_rank[i] == rank) {
+                    index = i;
+                    break;
+                }
+            }
+
+            /* record values and decrement our count if it was a child we were expecting */
+            if (index != -1) {
+                /* set socket, IP, and port for this child */
+                t->child_fd[index]   = fd;
+                t->child_ip[index]   = remote_ip;
+                t->child_port[index] = remote_port;
+                t->child_host[index] = remote_host;
+
+                /* rebuild name of child using new IP and port */
+                pmgr_tree_build_child_name_ip(t, index);
+
+                /* decrement our count by one */
+                count--;
+            } else {
+                /* unexpected child connected to us */
+                close(fd);
+                pmgr_free(remote_host);
+                return PMGR_FAILURE;
             }
         } else {
-            /* error from accept */
+            /* accept failed, try again */
         }
     }
-    return fd;
+    return PMGR_SUCCESS;
 }
 
 /*
@@ -204,17 +507,25 @@ int pmgr_tree_init_null(pmgr_tree_t* t)
     t->type           = PMGR_GROUP_TREE_NULL;
     t->ranks          =  0;
     t->rank           = -1;
+    t->host           = NULL;
+    t->name           = NULL;
     t->is_open        =  0;
-    t->parent         = -1;
+    t->parent_rank    = -1;
+    t->parent_host    = NULL;
     t->depth          = -1;
     t->parent_fd      = -1;
+    memset(&(t->parent_ip), 0, sizeof(t->parent_ip));
+    t->parent_port    = -1;
+    t->parent_name    = NULL;
     t->num_child      = -1;
     t->num_child_incl = -1;
-    t->child      = NULL;
+    t->child_rank = NULL;
+    t->child_host = NULL;
     t->child_fd   = NULL;
     t->child_incl = NULL;
     t->child_ip   = NULL;
     t->child_port = NULL;
+    t->child_name = NULL;
 
     return PMGR_SUCCESS;
 }
@@ -244,21 +555,36 @@ int pmgr_tree_init_binomial(pmgr_tree_t* t, int ranks, int rank)
     t->ranks = ranks;
     t->rank  = rank;
     t->depth          =  0;
-    t->parent         = -1;
+    t->parent_rank    = -1;
     t->num_child      =  0;
     t->num_child_incl =  0;
     if (max_children > 0) {
-        t->child      = (int*)   pmgr_malloc(max_children * sizeof(int),   "Child rank array");
+        t->child_rank = (int*)   pmgr_malloc(max_children * sizeof(int),   "Child rank array");
+        t->child_host = (char**) pmgr_malloc(max_children * sizeof(char*), "Child hostname array");
         t->child_fd   = (int*)   pmgr_malloc(max_children * sizeof(int),   "Child socket fd array");
         t->child_incl = (int*)   pmgr_malloc(max_children * sizeof(int),   "Child children count array");
         t->child_ip   = (struct in_addr*) pmgr_malloc(max_children * sizeof(struct in_addr), "Child IP array");
         t->child_port = (short*) pmgr_malloc(max_children * sizeof(short), "Child port array");
+        t->child_name = (char**) pmgr_malloc(max_children * sizeof(char*), "Child name array");
     }
+
+    /* set our hostname */
+    char hostname[256];
+    if (gethostname(hostname, sizeof(hostname)) == 0) {
+        t->host = strdup(hostname);
+    } else {
+        pmgr_error("Getting hostname @ %s:%d", __FILE__, __LINE__);
+    }
+
+    /* set our name for printing error messages */
+    pmgr_tree_build_name_rank(t->rank, t->ranks, &(t->name));
 
     /* initialize parent and child socket file descriptors to -1 */
     t->parent_fd = -1;
     for(i = 0; i < max_children; i++) {
         t->child_fd[i] = -1;
+        t->child_host[i] = NULL;
+        t->child_name[i] = NULL;
     }
 
     /* find our parent rank and the ranks of our children */
@@ -268,14 +594,21 @@ int pmgr_tree_init_binomial(pmgr_tree_t* t, int ranks, int rank)
     while (high - low > 0) {
         int mid = (high - low) / 2 + (high - low) % 2 + low;
         if (low == rank) {
-            t->child[t->num_child] = mid;
+            t->child_rank[t->num_child] = mid;
             t->child_incl[t->num_child] = high - mid + 1;
+
+            /* now that ranks and rank is set, we can build a name for this child */
+            pmgr_tree_build_name_child_rank(t, t->num_child);
+
             t->num_child++;
             t->num_child_incl += (high - mid + 1);
         }
         if (mid == rank) {
-            t->depth  = depth;
-            t->parent = low;
+            t->depth = depth;
+            t->parent_rank = low;
+
+            /* now that ranks and rank is set, we can build a name for this parent */
+            pmgr_tree_build_name_parent_rank(t);
         }
         if (mid <= rank) {
             low  = mid;
@@ -308,21 +641,36 @@ int pmgr_tree_init_binary(pmgr_tree_t* t, int ranks, int rank)
     t->ranks = ranks;
     t->rank  = rank;
     t->depth          =  0;
-    t->parent         = -1;
+    t->parent_rank    = -1;
     t->num_child      =  0;
     t->num_child_incl =  0;
     if (max_children > 0) {
-        t->child      = (int*)   pmgr_malloc(max_children * sizeof(int),   "Child rank array");
+        t->child_rank = (int*)   pmgr_malloc(max_children * sizeof(int),   "Child rank array");
+        t->child_host = (char**) pmgr_malloc(max_children * sizeof(char*), "Child hostname array");
         t->child_fd   = (int*)   pmgr_malloc(max_children * sizeof(int),   "Child socket fd array");
         t->child_incl = (int*)   pmgr_malloc(max_children * sizeof(int),   "Child children count array");
         t->child_ip   = (struct in_addr*) pmgr_malloc(max_children * sizeof(struct in_addr), "Child IP array");
         t->child_port = (short*) pmgr_malloc(max_children * sizeof(short), "Child port array");
+        t->child_name = (char**) pmgr_malloc(max_children * sizeof(char*), "Child name array");
     }
+
+    /* set our hostname */
+    char hostname[256];
+    if (gethostname(hostname, sizeof(hostname)) == 0) {
+        t->host = strdup(hostname);
+    } else {
+        pmgr_error("Getting hostname @ %s:%d", __FILE__, __LINE__);
+    }
+
+    /* set our name for printing error messages */
+    pmgr_tree_build_name_rank(t->rank, t->ranks, &(t->name));
 
     /* initialize parent and child socket file descriptors to -1 */
     t->parent_fd = -1;
     for(i = 0; i < max_children; i++) {
         t->child_fd[i] = -1;
+        t->child_host[i] = NULL;
+        t->child_name[i] = NULL;
     }
 
     /* find our parent rank and the ranks of our children */
@@ -335,8 +683,12 @@ int pmgr_tree_init_binary(pmgr_tree_t* t, int ranks, int rank)
         /* if we are the parent for this section, set our children */
         if (low == rank) {
             /* take the rank that is furthest away as the first child */
-            t->child[t->num_child] = mid;
+            t->child_rank[t->num_child] = mid;
             t->child_incl[t->num_child] = high - mid + 1;
+
+            /* now that ranks and rank is set, we can build a name for this child */
+            pmgr_tree_build_name_child_rank(t, t->num_child);
+
             t->num_child++;
             t->num_child_incl += (high - mid + 1);
 
@@ -344,8 +696,12 @@ int pmgr_tree_init_binary(pmgr_tree_t* t, int ranks, int rank)
              * set the next highest rank as our second child */
             low++;
             if (mid > low) {
-                t->child[t->num_child] = low;
+                t->child_rank[t->num_child] = low;
                 t->child_incl[t->num_child] = mid - low;
+
+                /* now that ranks and rank is set, we can build a name for this child */
+                pmgr_tree_build_name_child_rank(t, t->num_child);
+
                 t->num_child++;
                 t->num_child_incl += (mid - low);
             }
@@ -361,12 +717,16 @@ int pmgr_tree_init_binary(pmgr_tree_t* t, int ranks, int rank)
          * then we'll be a parent in the next step, so the current low is our parent */
         if (mid <= rank) {
             if (mid == rank) {
-                t->parent = low;
+                /* set the parent rank and its name */
+                t->parent_rank = low;
+                pmgr_tree_build_name_parent_rank(t);
             }
             low  = mid;
         } else {
             if (low+1 == rank) {
-                t->parent = low;
+                /* set the parent rank and its name */
+                t->parent_rank = low;
+                pmgr_tree_build_name_parent_rank(t);
             }
             low  = low + 1;
             high = mid - 1;
@@ -383,11 +743,25 @@ int pmgr_tree_free(pmgr_tree_t* t)
         return PMGR_FAILURE;
     }
 
-    pmgr_free(t->child);
+    int i;
+    for (i = 0; i < t->num_child; i++) {
+        if (t->child_name[i] != NULL) {
+            free(t->child_host[i]);
+            free(t->child_name[i]);
+        }
+    }
+
+    pmgr_free(t->host);
+    pmgr_free(t->name);
+    pmgr_free(t->parent_name);
+    pmgr_free(t->parent_host);
+    pmgr_free(t->child_rank);
+    pmgr_free(t->child_host);
     pmgr_free(t->child_fd);
     pmgr_free(t->child_incl);
     pmgr_free(t->child_ip);
     pmgr_free(t->child_port);
+    pmgr_free(t->child_name);
 
     pmgr_tree_init_null(t);
   
@@ -475,8 +849,8 @@ int pmgr_tree_check(pmgr_tree_t* t, int value)
             int child_value;
             if (pmgr_read_collective(t, t->child_fd[i], &child_value, sizeof(int)) < 0) {
                 /* failed to read value from child, assume child failed */
-                pmgr_error("Reading result from child (rank %d) at %s:%d failed @ file %s:%d",
-                    t->child[i], inet_ntoa(t->child_ip[i]), t->child_port[i], __FILE__, __LINE__
+                pmgr_error("%s reading result from child %s @ file %s:%d",
+                    t->name, t->child_name[i], __FILE__, __LINE__
                 );
                 pmgr_tree_abort(t);
                 pmgr_abort_trees();
@@ -502,8 +876,8 @@ int pmgr_tree_check(pmgr_tree_t* t, int value)
     if (t->parent_fd >= 0) {
         /* send result to parent */
         if (pmgr_write_collective(t, t->parent_fd, &all_value, sizeof(int)) < 0) {
-            pmgr_error("Writing check tree result to parent failed @ file %s:%d",
-                __FILE__, __LINE__
+            pmgr_error("%s writing check tree result to parent %s @ file %s:%d",
+                t->name, t->parent_name, __FILE__, __LINE__
             );
             pmgr_tree_abort(t);
             pmgr_abort_trees();
@@ -514,8 +888,8 @@ int pmgr_tree_check(pmgr_tree_t* t, int value)
     /* read result from parent */
     if (t->parent_fd >= 0) {
         if (pmgr_read_collective(t, t->parent_fd, &all_value, sizeof(int)) < 0) {
-            pmgr_error("Reading check tree result from parent failed @ file %s:%d",
-                __FILE__, __LINE__
+            pmgr_error("%s reading check tree result from parent %s @ file %s:%d",
+                t->name, t->parent_name, __FILE__, __LINE__
             );
             pmgr_tree_abort(t);
             pmgr_abort_trees();
@@ -527,8 +901,8 @@ int pmgr_tree_check(pmgr_tree_t* t, int value)
     for (i = 0; i < t->num_child; i++) {
         if (t->child_fd[i] >= 0) {
             if (pmgr_write_collective(t, t->child_fd[i], &all_value, sizeof(int)) < 0) {
-                pmgr_error("Writing result to child (rank %d) at %s:%d failed @ file %s:%d",
-                    t->child[i], inet_ntoa(t->child_ip[i]), t->child_port[i], __FILE__, __LINE__
+                pmgr_error("%s writing result to child %s @ file %s:%d",
+                    t->name, t->child_name[i], __FILE__, __LINE__
                 );
                 pmgr_tree_abort(t);
                 pmgr_abort_trees();
@@ -573,34 +947,73 @@ int pmgr_tree_open_table(pmgr_tree_t* t, int ranks, int rank, const void* table,
     while (iter < 2) {
         int odd = (t->depth + iter) % 2;
         if (odd) {
-            /* connect to children */
-            for (i=0; i < t->num_child; i++) {
-                int c = t->child[i];
-                t->child_ip[i]   = * (struct in_addr *)  ((char*)table + c*addr_size);
-                t->child_port[i] = * (short*) ((char*)table + c*addr_size + sizeof(struct in_addr));
-                t->child_fd[i]   = pmgr_connect_child(t->child_ip[i], t->child_port[i], auth);
-                if (t->child_fd[i] < 0) {
-                    /* failed to connect to child */
-                    pmgr_error("Connecting to child (rank %d) at %s:%d failed @ file %s:%d",
-                        t->child[i], inet_ntoa(t->child_ip[i]), t->child_port[i], __FILE__, __LINE__
-                    );
-                    pmgr_tree_abort(t);
-                    pmgr_abort_trees();
-                    exit(1);
+            if (mpirun_connect_down) {
+                /* connect to children */
+                for (i=0; i < t->num_child; i++) {
+                    /* get rank, IP, and port of child */
+                    int connect_rank = t->child_rank[i];
+                    t->child_ip[i]   = * (struct in_addr *)  ((char*)table + connect_rank*addr_size);
+                    t->child_port[i] = * (short*) ((char*)table + connect_rank*addr_size + sizeof(struct in_addr));
+
+                    /* now that we have the IP and port, include this info in the name */
+                    pmgr_tree_build_child_name_ip(t, i);
+
+                    /* connect to child */
+                    t->child_fd[i] = pmgr_connect_child(t->child_ip[i], t->child_port[i], auth);
+                    if (t->child_fd[i] < 0) {
+                        /* failed to connect to child */
+                        pmgr_error("%s connecting to child %s @ file %s:%d",
+                            t->name, t->child_name[i], __FILE__, __LINE__
+                        );
+                        pmgr_tree_abort(t);
+                        pmgr_abort_trees();
+                        exit(1);
+                    }
+                }
+            } else {
+                /* connect to parent */
+                if (t->rank != 0) {
+                    /* get rank, IP, and port of parent */
+                    int connect_rank  = t->parent_rank;
+                    t->parent_ip   = * (struct in_addr *)  ((char*)table + connect_rank*addr_size);
+                    t->parent_port = * (short*) ((char*)table + connect_rank*addr_size + sizeof(struct in_addr));
+
+                    /* now that we have the IP and port, include this info in the name */
+                    pmgr_tree_build_parent_name_ip(t);
+                    
+                    /* connect to parent */
+                    if (pmgr_wireup_connect_parent_direct(t->parent_ip, t->parent_port, t, auth) != PMGR_SUCCESS) {
+                        /* failed to connect to child */
+                        pmgr_error("%s connecting to parent %s @ file %s:%d",
+                            t->name, t->parent_name, __FILE__, __LINE__
+                        );
+                        pmgr_tree_abort(t);
+                        pmgr_abort_trees();
+                        exit(1);
+                    }
                 }
             }
         } else {
-            /* accept a connection from parent */
-            if (t->rank != 0) {
-                socklen_t parent_len;
-                struct sockaddr parent_addr;
-                parent_len = sizeof(parent_addr);
-                t->parent_fd = pmgr_accept_parent(sockfd, (struct sockaddr *) &parent_addr, &parent_len,
-                    auth
-                );
-                if (t->parent_fd < 0) {
-                    pmgr_error("Failed to accept parent connection (%m errno=%d) @ file %s:%d",
-                        errno, __FILE__, __LINE__
+            if (mpirun_connect_down) {
+                /* accept a connection from parent */
+                if (t->rank != 0) {
+                    if (pmgr_accept(sockfd, auth, &(t->parent_fd), &(t->parent_ip), &(t->parent_port)) != PMGR_SUCCESS) {
+                        pmgr_error("%s failed to accept parent connection %s (%m errno=%d) @ file %s:%d",
+                            t->name, t->parent_name, errno, __FILE__, __LINE__
+                        );
+                        pmgr_tree_abort(t);
+                        pmgr_abort_trees();
+                        exit(1);
+                    }
+
+                    /* if we made it this far, we established a connection, rebuild name to include IP and port */
+                    pmgr_tree_build_parent_name_ip(t);
+                }
+            } else {
+                /* accept connections from children */
+                if (pmgr_wireup_accept_children(sockfd, t, auth) != PMGR_SUCCESS) {
+                    pmgr_error("%s failed to accept children @ file %s:%d",
+                        t->name, __FILE__, __LINE__
                     );
                     pmgr_tree_abort(t);
                     pmgr_abort_trees();
@@ -627,14 +1040,14 @@ static int pmgr_tree_open_nodelist_scan_connect_children(
     /* we connect to our children in reverse order, which is in increasing rank order,
      * which seems to provide better performance on systems running SLURM */
     int i;
-    //for (i = 0; i < t->num_child; i++) {
+    //for (i = 0; i < t->num_child; i++)
     for (i = t->num_child - 1; i >= 0; i--) {
         /* get the rank of the child we'll connect to */
-        int child_rank = t->child[i];
-        if (child_rank >= nodes) {
+        int rank = t->child_rank[i];
+        if (rank >= nodes) {
             /* child rank is out of range */
             pmgr_error("Child rank %d is out of range of %d nodes %s @ file %s:%d",
-                child_rank, nodes, nodelist, __FILE__, __LINE__
+                rank, nodes, nodelist, __FILE__, __LINE__
             );
             pmgr_tree_abort(t);
             pmgr_abort_trees();
@@ -642,13 +1055,13 @@ static int pmgr_tree_open_nodelist_scan_connect_children(
         }
 
         /* get hostname of child (note we need to add one to the rank) */
-        char child_name[1024];
-        if (pmgr_range_nodelist_nth(nodelist, child_rank+1, child_name, sizeof(child_name))
+        char hostname[1024];
+        if (pmgr_range_nodelist_nth(nodelist, rank+1, hostname, sizeof(hostname))
             != PMGR_SUCCESS)
         {
             /* failed to extract child hostname from nodelist */
             pmgr_error("Failed to extract hostname for node %d from %s @ file %s:%d",
-                child_rank+1, nodelist, __FILE__, __LINE__
+                rank+1, nodelist, __FILE__, __LINE__
             );
             pmgr_tree_abort(t);
             pmgr_abort_trees();
@@ -656,25 +1069,73 @@ static int pmgr_tree_open_nodelist_scan_connect_children(
         }
 
         /* attempt to connect to child on this hostname using given portrange */
+        int fd;
         struct in_addr ip;
         short port;
-        int fd = pmgr_connect_hostname(
-            child_rank, child_name, portrange, portoffset, &ip, &port, auth, auth
-        );
-        if (fd >= 0) {
+        if (pmgr_connect_hostname(rank, hostname, portrange, portoffset, auth, auth, &fd, &ip, &port) == PMGR_SUCCESS) {
             /* connected to child, record ip, port, and socket */
+            t->child_fd[i]   = fd;
             t->child_ip[i]   = ip;
             t->child_port[i] = port;
-            t->child_fd[i]   = fd;
+
+            /* rebuild name using new ip and port */
+            pmgr_tree_build_child_name_ip(t, i);
         } else {
             /* failed to connect to child */
-            pmgr_error("Connecting to child (rank %d) on %s failed @ file %s:%d",
-                child_rank, child_name, __FILE__, __LINE__
+            pmgr_error("%s connecting to child %s on %s @ file %s:%d",
+                t->name, t->child_name[i], hostname, __FILE__, __LINE__
             );
             pmgr_tree_abort(t);
             pmgr_abort_trees();
             exit(1);
         }
+    }
+
+    return PMGR_SUCCESS;
+}
+
+static int pmgr_wireup_connect_parent_scan(
+    pmgr_tree_t* t, const char* nodelist, int nodes, const char* portrange, int portoffset,
+    const char* auth)
+{
+    /* get hostname of parent (note we need to add one to the rank) */
+    char hostname[1024];
+    int rank = t->parent_rank;
+    if (pmgr_range_nodelist_nth(nodelist, rank+1, hostname, sizeof(hostname))
+        != PMGR_SUCCESS)
+    {
+        /* failed to extract child hostname from nodelist */
+        pmgr_error("Failed to extract hostname for node %d from %s @ file %s:%d",
+            rank+1, nodelist, __FILE__, __LINE__
+        );
+        pmgr_tree_abort(t);
+        pmgr_abort_trees();
+        exit(1);
+    }
+
+    /* attempt to connect to parent on this hostname using given portrange */
+    int fd;
+    struct in_addr ip;
+    short port;
+    if (pmgr_connect_hostname(rank, hostname, portrange, portoffset, auth, auth, &fd, &ip, &port) == PMGR_SUCCESS) {
+        /* we've authenticated our connection, now exchange ranks with our parent process,
+         * so it knows who we are */
+        if (pmgr_wireup_connect_parent_exchange(fd, t) != PMGR_SUCCESS) {
+            pmgr_error("%s failed to exchcange ranks with parent %s @ file %s:%d",
+                t->name, t->parent_name, __FILE__, __LINE__
+            );
+            close(fd);
+            fd = -1;
+            return PMGR_FAILURE;
+        }
+    } else {
+        /* failed to connect to parent */
+        pmgr_error("%s connecting to parent %s on %s failed @ file %s:%d",
+            t->name, t->parent_name, hostname, __FILE__, __LINE__
+        );
+        pmgr_tree_abort(t);
+        pmgr_abort_trees();
+        exit(1);
     }
 
     return PMGR_SUCCESS;
@@ -693,29 +1154,54 @@ int pmgr_tree_open_nodelist_scan(pmgr_tree_t* t, const char* nodelist, const cha
     while (iter < 2) {
         int odd = (t->depth + iter) % 2;
         if (odd) {
-            /* connect to children */
-            if (pmgr_tree_open_nodelist_scan_connect_children(t, nodelist, nodes,
-                portrange, portoffset, auth) != PMGR_SUCCESS)
-            {
-                pmgr_error("Failed to connect to children @ file %s:%d",
-                    __FILE__, __LINE__
-                );
-                pmgr_tree_abort(t);
-                pmgr_abort_trees();
-                exit(1);
-            }
+            if (mpirun_connect_down) {
+                /* connect to children */
+                if (pmgr_tree_open_nodelist_scan_connect_children(t, nodelist, nodes,
+                    portrange, portoffset, auth) != PMGR_SUCCESS)
+                {
+                    pmgr_error("%s failed to connect to children @ file %s:%d",
+                        t->name, __FILE__, __LINE__
+                    );
+                    pmgr_tree_abort(t);
+                    pmgr_abort_trees();
+                    exit(1);
+                }
+           } else {
+                /* connect to parent */
+                if (t->rank != 0) {
+                    if (pmgr_wireup_connect_parent_scan(t, nodelist, nodes,
+                        portrange, portoffset, auth) != PMGR_SUCCESS)
+                    {
+                        pmgr_error("%s failed to connect to parent %s @ file %s:%d",
+                            t->name, t->parent_name, __FILE__, __LINE__
+                        );
+                        pmgr_tree_abort(t);
+                        pmgr_abort_trees();
+                        exit(1);
+                    }
+                }
+           }
         } else {
-            /* accept a connection from parent (so long as we're not rank 0) */
-            if (t->rank != 0) {
-                socklen_t parent_len;
-                struct sockaddr parent_addr;
-                parent_len = sizeof(parent_addr);
-                t->parent_fd = pmgr_accept_parent(sockfd, (struct sockaddr *) &parent_addr, &parent_len,
-                    auth
-                );
-                if (t->parent_fd < 0) {
-                    pmgr_error("Failed to accept parent connection (%m errno=%d) @ file %s:%d",
-                        errno, __FILE__, __LINE__
+            if (mpirun_connect_down) {
+                /* accept a connection from parent (so long as we're not rank 0) */
+                if (t->rank != 0) {
+                    if (pmgr_accept(sockfd, auth, &(t->parent_fd), &(t->parent_ip), &(t->parent_port)) != PMGR_SUCCESS) {
+                        pmgr_error("%s failed to accept parent connection %s (%m errno=%d) @ file %s:%d",
+                            t->name, t->parent_name, errno, __FILE__, __LINE__
+                        );
+                        pmgr_tree_abort(t);
+                        pmgr_abort_trees();
+                        exit(1);
+                    }
+
+                    /* if we make it this far, rebuild the parent name with new IP and port */
+                    pmgr_tree_build_parent_name_ip(t);
+                }
+            } else {
+                /* accept connections from children */
+                if (pmgr_wireup_accept_children(sockfd, t, auth) != PMGR_SUCCESS) {
+                    pmgr_error("%s failed to accept children @ file %s:%d",
+                        t->name, __FILE__, __LINE__
                     );
                     pmgr_tree_abort(t);
                     pmgr_abort_trees();
@@ -939,23 +1425,22 @@ int pmgr_tree_open_mpirun(pmgr_tree_t* t, int ranks, int rank, const char* auth)
 
     /* if i'm not rank 0, accept a connection (from parent) and receive socket table */
     if (t->rank != 0) {
-        socklen_t parent_len;
-        struct sockaddr parent_addr;
-	parent_len = sizeof(parent_addr);
-        t->parent_fd = pmgr_accept_parent(sockfd, (struct sockaddr *) &parent_addr, &parent_len, auth);
-        if (t->parent_fd >= 0) {
+        if (pmgr_accept(sockfd, auth, &(t->parent_fd), &(t->parent_ip), &(t->parent_port)) == PMGR_SUCCESS) {
+            /* rebuild the parent name given the IP and port */
+            pmgr_tree_build_parent_name_ip(t);
+
             /* if we're not using PMI, we need to read the ip:port table */
             if (pmgr_read_collective(t, t->parent_fd, recvbuf, sendcount * t->ranks) < 0) {
-                pmgr_error("Receiving IP:port table from parent failed @ file %s:%d",
-                    __FILE__, __LINE__
+                pmgr_error("%s receiving IP:port table from parent %s @ file %s:%d",
+                    t->name, t->parent_name, __FILE__, __LINE__
                 );
                 pmgr_tree_abort(t);
                 pmgr_abort_trees();
                 exit(1);
             }
         } else {
-            pmgr_error("Failed to accept parent connection (%m errno=%d) @ file %s:%d",
-                errno, __FILE__, __LINE__
+            pmgr_error("%s failed to accept parent connection %s (%m errno=%d) @ file %s:%d",
+                t->name, t->parent_name, errno, __FILE__, __LINE__
             );
             pmgr_tree_abort(t);
             pmgr_abort_trees();
@@ -965,15 +1450,21 @@ int pmgr_tree_open_mpirun(pmgr_tree_t* t, int ranks, int rank, const char* auth)
 
     /* for each child, open socket connection and forward socket table */
     for (i=0; i < t->num_child; i++) {
-        int c = t->child[i];
+        /* get rank, IP, and port of child */
+        int c = t->child_rank[i];
         t->child_ip[i]   = * (struct in_addr *)  ((char*)recvbuf + sendcount*c);
         t->child_port[i] = * (short*) ((char*)recvbuf + sendcount*c + sizeof(ip));
-        t->child_fd[i]   = pmgr_connect_child(t->child_ip[i], t->child_port[i], auth);
+
+        /* rebuild name of child using IP and port */
+        pmgr_tree_build_child_name_ip(t, i);
+
+        /* connect to child */
+        t->child_fd[i] = pmgr_connect_child(t->child_ip[i], t->child_port[i], auth);
         if (t->child_fd[i] >= 0) {
             /* connected to child, now forward IP table */
             if (pmgr_write_collective(t, t->child_fd[i], recvbuf, sendcount * t->ranks) < 0) {
-                pmgr_error("Writing IP:port table to child (rank %d) at %s:%d failed @ file %s:%d",
-                    t->child[i], inet_ntoa(t->child_ip[i]), t->child_port[i], __FILE__, __LINE__
+                pmgr_error("%s writing IP:port table to child %s @ file %s:%d",
+                    t->name, t->child_name[i], __FILE__, __LINE__
                 );
                 pmgr_tree_abort(t);
                 pmgr_abort_trees();
@@ -981,8 +1472,8 @@ int pmgr_tree_open_mpirun(pmgr_tree_t* t, int ranks, int rank, const char* auth)
             }
         } else {
             /* failed to connect to child */
-            pmgr_error("Connecting to child (rank %d) at %s:%d failed @ file %s:%d",
-                t->child[i], inet_ntoa(t->child_ip[i]), t->child_port[i], __FILE__, __LINE__
+            pmgr_error("%s connecting to child %s @ file %s:%d",
+                t->name, t->child_name[i], __FILE__, __LINE__
             );
             pmgr_tree_abort(t);
             pmgr_abort_trees();
@@ -1043,8 +1534,8 @@ int pmgr_tree_bcast(pmgr_tree_t* t, void* buf, int size)
     /* if i'm not rank 0, receive data from parent */
     if (t->rank != 0) {
         if (pmgr_read_collective(t, t->parent_fd, buf, size) < 0) {
-            pmgr_error("Receiving broadcast data from parent failed @ file %s:%d",
-                __FILE__, __LINE__
+            pmgr_error("%s receiving broadcast data from parent %s @ file %s:%d",
+                t->name, t->parent_name, __FILE__, __LINE__
             );
             pmgr_tree_abort(t);
             pmgr_abort_trees();
@@ -1056,8 +1547,8 @@ int pmgr_tree_bcast(pmgr_tree_t* t, void* buf, int size)
     int i;
     for(i = 0; i < t->num_child; i++) {
         if (pmgr_write_collective(t, t->child_fd[i], buf, size) < 0) {
-            pmgr_error("Broadcasting data to child (rank %d) at %s:%d failed @ file %s:%d",
-                t->child[i], inet_ntoa(t->child_ip[i]), t->child_port[i], __FILE__, __LINE__
+            pmgr_error("%s broadcasting data to child %s @ file %s:%d",
+                t->name, t->child_name[i], __FILE__, __LINE__
             );
             pmgr_tree_abort(t);
             pmgr_abort_trees();
@@ -1089,8 +1580,8 @@ int pmgr_tree_gather(pmgr_tree_t* t, void* sendbuf, int sendcount, void* recvbuf
     int offset = sendcount;
     for(i = t->num_child-1; i >= 0; i--) {
         if (pmgr_read_collective(t, t->child_fd[i], (char*)bigbuf + offset, sendcount * t->child_incl[i]) < 0) {
-            pmgr_error("Gathering data from child (rank %d) at %s:%d failed @ file %s:%d",
-                t->child[i], inet_ntoa(t->child_ip[i]), t->child_port[i], __FILE__, __LINE__
+            pmgr_error("%s gathering data from child %s @ file %s:%d",
+                t->name, t->child_name[i], __FILE__, __LINE__
             );
             pmgr_tree_abort(t);
             pmgr_abort_trees();
@@ -1102,8 +1593,8 @@ int pmgr_tree_gather(pmgr_tree_t* t, void* sendbuf, int sendcount, void* recvbuf
     /* if i'm not rank 0, send to parent and free temporary buffer */
     if (t->rank != 0) {
         if (pmgr_write_collective(t, t->parent_fd, bigbuf, bigcount) < 0) {
-            pmgr_error("Sending gathered data to parent failed @ file %s:%d",
-                __FILE__, __LINE__
+            pmgr_error("%s sending gathered data to parent %s @ file %s:%d",
+                t->name, t->parent_name, __FILE__, __LINE__
             );
             pmgr_tree_abort(t);
             pmgr_abort_trees();
@@ -1127,8 +1618,8 @@ int pmgr_tree_scatter(pmgr_tree_t* t, void* sendbuf, int sendcount, void* recvbu
     if (t->rank != 0) {
         bigbuf = (void*) pmgr_malloc(bigcount, "Temporary scatter buffer in pmgr_scatter_tree");
         if (pmgr_read_collective(t, t->parent_fd, bigbuf, bigcount) < 0) {
-            pmgr_error("Receiving scatter data from parent failed @ file %s:%d",
-                __FILE__, __LINE__
+            pmgr_error("%s receiving scatter data from parent %s @ file %s:%d",
+                t->name, t->parent_name, __FILE__, __LINE__
             );
             pmgr_tree_abort(t);
             pmgr_abort_trees();
@@ -1139,9 +1630,11 @@ int pmgr_tree_scatter(pmgr_tree_t* t, void* sendbuf, int sendcount, void* recvbu
     /* if i have any children, scatter data to them */
     int i;
     for(i = 0; i < t->num_child; i++) {
-        if (pmgr_write_collective(t, t->child_fd[i], (char*)bigbuf + sendcount * (t->child[i] - t->rank), sendcount * t->child_incl[i]) < 0) {
-            pmgr_error("Scattering data to child (rank %d) at %s:%d failed @ file %s:%d",
-                t->child[i], inet_ntoa(t->child_ip[i]), t->child_port[i], __FILE__, __LINE__
+        if (pmgr_write_collective(t, t->child_fd[i], (char*)bigbuf + sendcount * (t->child_rank[i] - t->rank),
+                sendcount * t->child_incl[i]) < 0)
+        {
+            pmgr_error("%s scattering data to child %s @ file %s:%d",
+                t->name, t->child_name[i], __FILE__, __LINE__
             );
             pmgr_tree_abort(t);
             pmgr_abort_trees();
@@ -1173,8 +1666,8 @@ int pmgr_tree_allreduce_int64t(pmgr_tree_t* t, int64_t* sendint, int64_t* recvin
     for(i = t->num_child-1; i >= 0; i--) {
         int64_t child_value;
         if (pmgr_read_collective(t, t->child_fd[i], &child_value, sizeof(child_value)) < 0) {
-            pmgr_error("Reducing data from child (rank %d) at %s:%d failed @ file %s:%d",
-                t->child[i], inet_ntoa(t->child_ip[i]), t->child_port[i], __FILE__, __LINE__
+            pmgr_error("%s reducing data from child %s @ file %s:%d",
+                t->name, t->child_name[i], __FILE__, __LINE__
             );
             pmgr_tree_abort(t);
             pmgr_abort_trees();
@@ -1191,8 +1684,8 @@ int pmgr_tree_allreduce_int64t(pmgr_tree_t* t, int64_t* sendint, int64_t* recvin
     /* if i'm not rank 0, send to parent, otherwise copy val to recvint */
     if (t->rank != 0) {
         if (pmgr_write_collective(t, t->parent_fd, &val, sizeof(val)) < 0) {
-            pmgr_error("Sending reduced data to parent failed @ file %s:%d",
-                __FILE__, __LINE__
+            pmgr_error("%s sending reduced data to parent %s @ file %s:%d",
+                t->name, t->parent_name, __FILE__, __LINE__
             );
             pmgr_tree_abort(t);
             pmgr_abort_trees();
@@ -1248,8 +1741,8 @@ int pmgr_tree_aggregate(pmgr_tree_t* t, const void* sendbuf, int64_t sendcount, 
         /* read number of incoming bytes */
         int64_t incoming;
         if (pmgr_read_collective(t, t->child_fd[i], &incoming, sizeof(int64_t)) < 0) {
-            pmgr_error("Receiving incoming byte count from child (rank %d) at %s:%d failed @ file %s:%d",
-                t->child[i], inet_ntoa(t->child_ip[i]), t->child_port[i], __FILE__, __LINE__
+            pmgr_error("%s receiving incoming byte count from child %s @ file %s:%d",
+                t->name, t->child_name[i], __FILE__, __LINE__
             );
             pmgr_tree_abort(t);
             pmgr_abort_trees();
@@ -1258,8 +1751,8 @@ int pmgr_tree_aggregate(pmgr_tree_t* t, const void* sendbuf, int64_t sendcount, 
 
         /* now receive the data */
         if (pmgr_read_collective(t, t->child_fd[i], recvbuf + offset, incoming) < 0) {
-            pmgr_error("Gathering data from child (rank %d) at %s:%d failed @ file %s:%d",
-                t->child[i], inet_ntoa(t->child_ip[i]), t->child_port[i], __FILE__, __LINE__
+            pmgr_error("%s gathering data from child %s @ file %s:%d",
+                t->name, t->child_name[i], __FILE__, __LINE__
             );
             pmgr_tree_abort(t);
             pmgr_abort_trees();
@@ -1274,8 +1767,8 @@ int pmgr_tree_aggregate(pmgr_tree_t* t, const void* sendbuf, int64_t sendcount, 
     if (t->rank != 0) {
         /* write number of bytes we'll send to parent */
         if (pmgr_write_collective(t, t->parent_fd, &offset, sizeof(int64_t)) < 0) {
-            pmgr_error("Sending byte count to parent failed @ file %s:%d",
-                __FILE__, __LINE__
+            pmgr_error("%s sending byte count to parent %s @ file %s:%d",
+                t->name, t->parent_name, __FILE__, __LINE__
             );
             pmgr_tree_abort(t);
             pmgr_abort_trees();
@@ -1284,8 +1777,8 @@ int pmgr_tree_aggregate(pmgr_tree_t* t, const void* sendbuf, int64_t sendcount, 
 
         /* now write the bytes */
         if (pmgr_write_collective(t, t->parent_fd, recvbuf, offset) < 0) {
-            pmgr_error("Sending gathered data to parent failed @ file %s:%d",
-                __FILE__, __LINE__
+            pmgr_error("%s sending gathered data to parent %s @ file %s:%d",
+                t->name, t->parent_name, __FILE__, __LINE__
             );
             pmgr_tree_abort(t);
             pmgr_abort_trees();
@@ -1333,8 +1826,8 @@ int pmgr_tree_alltoall(pmgr_tree_t* t, void* sendbuf, int sendcount, void* recvb
     int offset = 0;
     for(i = t->num_child-1; i >= 0; i--) {
         if (pmgr_read_collective(t, t->child_fd[i], (char*)tmp_recv_buf + offset, t->ranks * sendcount * t->child_incl[i]) < 0) {
-            pmgr_error("Gathering data from child (rank %d) at %s:%d failed @ file %s:%d",
-                t->child[i], inet_ntoa(t->child_ip[i]), t->child_port[i], __FILE__, __LINE__
+            pmgr_error("%s gathering data from child %s @ file %s:%d",
+                t->name, t->child_name[i], __FILE__, __LINE__
             );
             pmgr_tree_abort(t);
             pmgr_abort_trees();
@@ -1366,8 +1859,8 @@ int pmgr_tree_alltoall(pmgr_tree_t* t, void* sendbuf, int sendcount, void* recvb
     /* if i'm not rank 0, send to parent and free temporary buffer */
     if (t->rank != 0) {
         if (pmgr_write_collective(t, t->parent_fd, tmp_send_buf, tmp_send_count) < 0) {
-            pmgr_error("Sending alltoall data to parent failed @ file %s:%d",
-                __FILE__, __LINE__
+            pmgr_error("%s sending alltoall data to parent %s @ file %s:%d",
+                t->name, t->parent_name, __FILE__, __LINE__
             );
             pmgr_tree_abort(t);
             pmgr_abort_trees();

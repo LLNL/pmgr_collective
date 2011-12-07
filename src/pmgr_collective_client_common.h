@@ -38,6 +38,9 @@ int pmgr_connect_retry(struct in_addr ip, int port, int timeout_millisec, int at
  */
 int pmgr_connect(struct in_addr ip, int port);
 
+/* accept a connection, authenticate it, and extract remote IP and port info from socket */
+int pmgr_accept(int sockfd, const char* auth, int* out_fd, struct in_addr* out_ip, short* out_port);
+
 /* open a listening socket and return the descriptor, the ip address, and the port */
 int pmgr_open_listening_socket(const char* portrange, int portoffset, int* out_fd, struct in_addr* out_ip, short* out_port);
 
@@ -48,8 +51,8 @@ int pmgr_authenticate_connect(int fd, const char* auth_connect, const char* auth
 
 /* Attempts to connect to a given hostname using a port list and timeouts */
 int pmgr_connect_hostname(
-    int rank, const char* hostname, const char* portrange, int portoffset, struct in_addr* ip, short* port,
-    const char* auth_connect, const char* auth_accept
+    int rank, const char* hostname, const char* portrange, int portoffset, const char* auth_connect, const char* auth_accept,
+    int* fd, struct in_addr* ip, short* port
 );
 
 #endif /* _PMGR_COLLECTIVE_CLIENT_COMMON_H */

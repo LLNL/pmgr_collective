@@ -1,3 +1,12 @@
+2011-12-07 Adam Moody <moody20@llnl.gov>
+
+	* : tag pmgr-1.0_4
+
+	* : Increased port scan connect timeout from 20msec to 100msec and
+	changed default connection direction from parent-to-children to
+	children-to-parent.  Track IP:port and hostname of parents and
+	children to report in error messages.
+
 2011-11-30 Adam Moody <moody20@llnl.gov>
 
 	* : tag pmgr-1.0_3

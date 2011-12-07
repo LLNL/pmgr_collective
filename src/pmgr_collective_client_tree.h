@@ -17,21 +17,40 @@
 #define PMGR_GROUP_TREE_NULL     (0)
 #define PMGR_GROUP_TREE_BINOMIAL (1)
 
+#if 0
+typedef struct pmgr_tree_endpoint {
+    int rank;
+    int fd;
+    struct in_addr ip;
+    unsigned short port;
+    char* host;
+    char* name;
+} pmgr_tree_endpoint_t;
+#endif
+
 typedef struct pmgr_tree {
     int type;      /* type of group */
     int ranks;     /* number of ranks in group */
     int rank;      /* rank of process within group */
+    char* host;    /* name of host the process is on */
+    char* name;    /* name of process */
     int is_open;   /* records whether group is connected */
     int depth;     /* depth within the tree */
-    int parent;    /* rank of parent within group */
-    int parent_fd; /* socket to parent */
+    int parent_rank;          /* rank of parent within group */
+    char* parent_host;        /* name of host parent is running on */
+    int parent_fd;            /* socket to parent */
+    struct in_addr parent_ip; /* ip address of parent */
+    short parent_port;        /* port of parent */
+    char* parent_name;        /* user-friendly name to print in error messages */
     int num_child; /* number of children this process has */
     int num_child_incl; /* total number of procs below parent (including itself) */
-    int*            child;      /* rank of each child within group */
+    int*            child_rank; /* rank of each child within group */
+    char**          child_host; /* name of host child is running on */
     int*            child_fd;   /* file descriptor to each child */
     int*            child_incl; /* number of procs each child is responsible for */
     struct in_addr* child_ip;   /* ip address of each child */
     short*          child_port; /* port of each child */
+    char**          child_name; /* user-friendly name to print in error messages */
 } pmgr_tree_t;
 
 /*

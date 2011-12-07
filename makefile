@@ -3,9 +3,8 @@ OPT ?= -g -O0
 #OPT ?= -g -O2
 #OPT ?= -g -O3
 PREFIX ?= /usr/local/tools/pmgr_collective
-BDDIR := /g/g0/moody20/packages/pmgr_collective
-PMGR_INC := -I$(BDDIR)/include
-PMGR_LIB := -L$(BDDIR)/lib -lpmgr_collective
+PMGR_INC := -I../include
+PMGR_LIB := -L../lib -lpmgr_collective
 
 PMGR_OBJS := \
 	pmgr_collective_common.o \

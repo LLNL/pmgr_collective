@@ -82,11 +82,15 @@
 #define MPIRUN_CONNECT_RANDOM (1) /* enable/disable randomized option for backoff */
 #endif
 
+#ifndef MPIRUN_CONNECT_DOWN
+#define MPIRUN_CONNECT_DOWN (0) /* whether to connect tree from parent to children (down) or children to parent (up) */
+#endif
+
 #ifndef MPIRUN_PORT_SCAN_TIMEOUT      /* total time we'll try to connect to a host before throwing a fatal error */
 #define MPIRUN_PORT_SCAN_TIMEOUT (60) /* seconds */
 #endif
-#ifndef MPIRUN_PORT_SCAN_CONNECT_TIMEOUT      /* time to wait before giving up on connect call */
-#define MPIRUN_PORT_SCAN_CONNECT_TIMEOUT (20) /* millisecs */
+#ifndef MPIRUN_PORT_SCAN_CONNECT_TIMEOUT       /* time to wait before giving up on connect call */
+#define MPIRUN_PORT_SCAN_CONNECT_TIMEOUT (100) /* millisecs */
 #endif
 #ifndef MPIRUN_PORT_SCAN_CONNECT_ATTEMPTS     /* number of consecutive times to try a given port */
 #define MPIRUN_PORT_SCAN_CONNECT_ATTEMPTS (1) /* seconds */
@@ -130,6 +134,8 @@ int mpirun_connect_tries    = MPIRUN_CONNECT_TRIES;
 int mpirun_connect_timeout  = MPIRUN_CONNECT_TIMEOUT;
 int mpirun_connect_backoff  = MPIRUN_CONNECT_BACKOFF;
 int mpirun_connect_random   = MPIRUN_CONNECT_RANDOM;
+
+int mpirun_connect_down = MPIRUN_CONNECT_DOWN;
 
 unsigned pmgr_backoff_rand_seed;
 
@@ -871,6 +877,11 @@ int pmgr_init(int *argc_p, char ***argv_p, int *np_p, int *me_p, int *id_p)
     /* enable/disable radomized option in backoff */
     if ((value = pmgr_getenv("MPIRUN_CONNECT_RANDOM", ENV_OPTIONAL))) {
         mpirun_connect_random = atoi(value);
+    }
+
+    /* whether to connect tree from parent to children (down) or children to parent (up) */
+    if ((value = pmgr_getenv("MPIRUN_CONNECT_DOWN", ENV_OPTIONAL))) {
+        mpirun_connect_down = atoi(value);
     }
 
     /* MPIRUN_USE_TREES={0,1} disables/enables tree algorithms */
