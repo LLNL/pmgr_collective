@@ -1,3 +1,36 @@
+2012-01-13 Adam Moody <moody20@llnl.gov>
+
+	* : tag pmgr-1.0_5
+
+	* pmgr_collective_client.c,
+	  pmgr_collective_client_common.c : Disable MPIRUN_PORT_SCAN_TIMEOUT
+	  if set to -1.
+
+	* pmgr_collective_client.c,
+	  pmgr_collective_client_common.c,
+	  pmgr_collective_client_slurm.c: Disable MPIRUN_OPEN_TIMEOUT if set
+	  to -1.
+
+	* pmgr_collective_client_common.c : Added code to increase timeouts
+	by a factor of two after each port sweep, but left this disabled.
+
+	* pmgr_collective_client_common.c : Added code to sleep for some time
+	between port scan attempts.
+
+	* pmgr_collective_client_mpirun.c : Added usleep delay back into
+	connect and close calls based on rank to stagger across ranks.
+
+	* pmgr_collective_client.c : Don't connect back to mpirun if using
+	shared memory.
+
+	* : parameter adjustments
+	MPIRUN_OPEN_TIMEOUT 300 --> 1200
+	MPIRUN_CONNECT_TRIES 7 --> 20
+	MPIRUN_CONNECT_TIMEOUT 2 --> 60
+	MPIRUN_PORT_SCAN_TIMEOUT 60 --> 600
+	MPIRUN_PORT_SCAN_CONNECT_TIMEOUT 100 --> 10000
+	MPIRUN_AUTHENTICATE_TIMEOUT 5000 --> 60000
+
 2011-12-07 Adam Moody <moody20@llnl.gov>
 
 	* : tag pmgr-1.0_4

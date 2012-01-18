@@ -22,6 +22,10 @@ size_t buffer_size;
 char* sbuffer;
 char* rbuffer;
 
+//#define BIGBUF_SIZE (1024*1024*1024)
+#define BIGBUF_SIZE (1024*1024*10)
+static char bigbuf[BIGBUF_SIZE] = {'a'};
+
 /* fill the buffer with a pattern */
 void init_sbuffer(int rank)
 {
@@ -91,6 +95,10 @@ int main(int argc, char* argv[])
     exit(1);
   }
 //  printf("Ranks: %d, Rank: %d, ID: %d\n", ranks, my_rank, my_id);
+
+  for (i = 0; i < BIGBUF_SIZE; i++) {
+    bigbuf[i] = (char)(i % 26) + 'a';
+  }
 
   buffer_size = ranks * size;
   sbuffer = malloc(buffer_size);
