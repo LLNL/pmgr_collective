@@ -1,3 +1,18 @@
+2012-01-26 Adam Moody <moody20@llnl.gov>
+
+	* : tag pmgr-1.0_6
+
+	* pmgr_collective_common.c,h : Added PMGR_ERR codes along with
+	function to convert integer to string.  Return new error codes
+	int pmgr_read_fd_timeout() and pmgr_write_fd_suppress().
+
+	* pmgr_collective_client_tree.c : Print PMGR_ERR string upon
+	error in tree_check().
+
+	* : parameter adjustments
+	MPIRUN_OPEN_TIMEOUT 600 --> 1800
+	MPIRUN_PORT_SCAN_TIMEOUT 600 --> 1800
+
 2012-01-13 Adam Moody <moody20@llnl.gov>
 
 	* : tag pmgr-1.0_5
@@ -24,7 +39,7 @@
 	shared memory.
 
 	* : parameter adjustments
-	MPIRUN_OPEN_TIMEOUT 300 --> 1200
+	MPIRUN_OPEN_TIMEOUT 300 --> 600
 	MPIRUN_CONNECT_TRIES 7 --> 20
 	MPIRUN_CONNECT_TIMEOUT 2 --> 60
 	MPIRUN_PORT_SCAN_TIMEOUT 60 --> 600
