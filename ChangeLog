@@ -1,3 +1,14 @@
+2012-03-08 Adam Moody <moody20@llnl.gov>
+
+	* : tag pmgr-1.0_7
+
+	* pmgr_collective_client_slurm.c : Had timeout in first shared
+	memory barrier to catch processes late to check in, but this was
+	also triggering on some checked in procs leading to a race condition.
+
+	* pmgr_collective_client_common.c : Print value of timeout in
+	exceeded timeout error message.
+
 2012-01-26 Adam Moody <moody20@llnl.gov>
 
 	* : tag pmgr-1.0_6

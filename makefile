@@ -1,4 +1,4 @@
-OPT ?= -g -O0
+OPT ?= -g -O0 -Wall
 #OPT ?= -g -O1
 #OPT ?= -g -O2
 #OPT ?= -g -O3
