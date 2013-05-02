@@ -1221,14 +1221,6 @@ int pmgr_tree_open_nodelist_scan(pmgr_tree_t* t, const char* nodelist, const cha
     return PMGR_SUCCESS;
 }
 
-#ifdef HAVE_PMI
-static int pmgr_pmi_decode_rank_addr(const char* valstr, struct in_addr* ip, short* port)
-{
-
-    return PMGR_SUCCESS;
-}
-#endif
-
 /* open socket tree across MPI tasks */
 int pmgr_tree_open_pmi(pmgr_tree_t* t, int ranks, int rank, const char* auth)
 {
