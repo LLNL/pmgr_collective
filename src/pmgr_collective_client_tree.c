@@ -1221,14 +1221,30 @@ int pmgr_tree_open_nodelist_scan(pmgr_tree_t* t, const char* nodelist, const cha
     return PMGR_SUCCESS;
 }
 
-/* build socket table using PMI */
-static int pmgr_tree_table_pmi(int ranks, int rank, struct in_addr* ip, short port, void* table)
+#ifdef HAVE_PMI
+static int pmgr_pmi_decode_rank_addr(const char* valstr, struct in_addr* ip, short* port)
+{
+
+    return PMGR_SUCCESS;
+}
+#endif
+
+/* open socket tree across MPI tasks */
+int pmgr_tree_open_pmi(pmgr_tree_t* t, int ranks, int rank, const char* auth)
 {
 #ifdef HAVE_PMI
     int i;
 
-    /* compute size of each table entry */
-    size_t addr_size = sizeof(struct in_addr) + sizeof(short);
+    /* create a socket to accept connections */
+    int sockfd = -1;
+    struct in_addr ip;
+    short port;
+    if (pmgr_open_listening_socket(NULL, 0, &sockfd, &ip, &port) != PMGR_SUCCESS) {
+        pmgr_error("Creating listening socket @ file %s:%d",
+            __FILE__, __LINE__
+        );
+        PMI_Abort(1, "Failed to create listening socket");
+    }
 
     /* get the number of bytes we need for our KVS name */
     int kvslen = 0;
@@ -1277,7 +1293,7 @@ static int pmgr_tree_table_pmi(int ranks, int rank, struct in_addr* ip, short po
         );
         PMI_Abort(1, "Could not copy rank into key buffer");
     }
-    if (snprintf(valstr, vallen, "%s:%d", inet_ntoa(*ip), port) >= vallen) {
+    if (snprintf(valstr, vallen, "%s:%hd", inet_ntoa(ip), port) >= vallen) {
         pmgr_error("Could not copy ip:port into value buffer @ file %s:%d",
             __FILE__, __LINE__
         );
@@ -1304,87 +1320,163 @@ static int pmgr_tree_table_pmi(int ranks, int rank, struct in_addr* ip, short po
         PMI_Abort(1, "Failed to complete barrier after commit in PMI");
     }
 
-    /* extract ip:port for each process */
-    for(i=0; i < ranks; i++) {
-        /* build the key for this process */
-        if (snprintf(keystr, keylen, "%d", i) >= keylen) {
-            pmgr_error("Could not copy rank %d into key buffer @ file %s:%d",
-                i, __FILE__, __LINE__
-            );
-            PMI_Abort(1, "Could not copy rank into key buffer");
+    /* compute our depth, parent,and children */
+    pmgr_tree_init_binary(t, ranks, rank);
+
+    /* establish connections, depending on the process's depth in the tree we either
+     * accept a connection from our parent first or we try to connect to our children */
+    int iter = 0;
+    while (iter < 2) {
+        int odd = (t->depth + iter) % 2;
+        if (odd) {
+            if (mpirun_connect_down) {
+                /* connect to children */
+                for (i=0; i < t->num_child; i++) {
+                    /* get rank, IP, and port of child */
+                    int connect_rank = t->child_rank[i];
+
+                    /* build the key for this process */
+                    if (snprintf(keystr, keylen, "%d", connect_rank) >= keylen) {
+                        pmgr_error("Could not copy rank %d into key buffer @ file %s:%d",
+                            connect_rank, __FILE__, __LINE__
+                        );
+                        PMI_Abort(1, "Could not copy rank into key buffer");
+                    }
+
+                    /* extract value for this process */
+                    if (PMI_KVS_Get(kvsstr, keystr, valstr, vallen) != PMI_SUCCESS) {
+                        pmgr_error("Could not get key/value for %s @ file %s:%d",
+                            keystr, __FILE__, __LINE__
+                        );
+                        PMI_Abort(1, "Could not copy rank into key buffer");
+                    }
+
+                    /* break the ip:port string */
+                    char* ipstr = strtok(valstr, ":");
+                    char* portstr = strtok(NULL, ":");
+
+                    /* convert ip and port to proper datatypes */
+                    if (inet_aton(ipstr, &(t->child_ip[i])) == 0) {
+                        pmgr_error("Failed to convert dotted decimal notation to struct in_addr for %s @ file %s:%d",
+                            ipstr, __FILE__, __LINE__
+                        );
+                        PMI_Abort(1, "Could not convert IP address string to struct");
+                    }
+                    t->child_port[i] = atoi(portstr);
+
+                    /* now that we have the IP and port, include this info in the name */
+                    pmgr_tree_build_child_name_ip(t, i);
+
+                    /* connect to child */
+                    t->child_fd[i] = pmgr_connect_child(t->child_ip[i], t->child_port[i], auth);
+                    if (t->child_fd[i] < 0) {
+                        /* failed to connect to child */
+                        pmgr_error("%s connecting to child %s @ file %s:%d",
+                            t->name, t->child_name[i], __FILE__, __LINE__
+                        );
+                        pmgr_tree_abort(t);
+                        pmgr_abort_trees();
+                        exit(1);
+                    }
+                }
+            } else {
+                /* connect to parent */
+                if (t->rank != 0) {
+                    /* get rank, IP, and port of parent */
+                    int connect_rank = t->parent_rank;
+
+                    /* build the key for this process */
+                    if (snprintf(keystr, keylen, "%d", connect_rank) >= keylen) {
+                        pmgr_error("Could not copy rank %d into key buffer @ file %s:%d",
+                            connect_rank, __FILE__, __LINE__
+                        );
+                        PMI_Abort(1, "Could not copy rank into key buffer");
+                    }
+
+                    /* extract value for this process */
+                    if (PMI_KVS_Get(kvsstr, keystr, valstr, vallen) != PMI_SUCCESS) {
+                        pmgr_error("Could not get key/value for %s @ file %s:%d",
+                            keystr, __FILE__, __LINE__
+                        );
+                        PMI_Abort(1, "Could not copy rank into key buffer");
+                    }
+
+                    /* break the ip:port string */
+                    char* ipstr = strtok(valstr, ":");
+                    char* portstr = strtok(NULL, ":");
+
+                    /* convert ip and port to proper datatypes */
+                    if (inet_aton(ipstr, &(t->parent_ip)) == 0) {
+                        pmgr_error("Failed to convert dotted decimal notation to struct in_addr for %s @ file %s:%d",
+                            ipstr, __FILE__, __LINE__
+                        );
+                        PMI_Abort(1, "Could not convert IP address string to struct");
+                    }
+                    t->parent_port = atoi(portstr);
+
+                    /* now that we have the IP and port, include this info in the name */
+                    pmgr_tree_build_parent_name_ip(t);
+                    
+                    /* connect to parent */
+                    if (pmgr_wireup_connect_parent_direct(t->parent_ip, t->parent_port, t, auth) != PMGR_SUCCESS) {
+                        /* failed to connect to child */
+                        pmgr_error("%s connecting to parent %s @ file %s:%d",
+                            t->name, t->parent_name, __FILE__, __LINE__
+                        );
+                        pmgr_tree_abort(t);
+                        pmgr_abort_trees();
+                        exit(1);
+                    }
+                }
+            }
+        } else {
+            if (mpirun_connect_down) {
+                /* accept a connection from parent */
+                if (t->rank != 0) {
+                    if (pmgr_accept(sockfd, auth, &(t->parent_fd), &(t->parent_ip), &(t->parent_port)) != PMGR_SUCCESS) {
+                        pmgr_error("%s failed to accept parent connection %s (%m errno=%d) @ file %s:%d",
+                            t->name, t->parent_name, errno, __FILE__, __LINE__
+                        );
+                        pmgr_tree_abort(t);
+                        pmgr_abort_trees();
+                        exit(1);
+                    }
+
+                    /* if we made it this far, we established a connection, rebuild name to include IP and port */
+                    pmgr_tree_build_parent_name_ip(t);
+                }
+            } else {
+                /* accept connections from children */
+                if (pmgr_wireup_accept_children(sockfd, t, auth) != PMGR_SUCCESS) {
+                    pmgr_error("%s failed to accept children @ file %s:%d",
+                        t->name, __FILE__, __LINE__
+                    );
+                    pmgr_tree_abort(t);
+                    pmgr_abort_trees();
+                    exit(1);
+                }
+            }
         }
-
-        /* extract value for this process */
-        if (PMI_KVS_Get(kvsstr, keystr, valstr, vallen) != PMI_SUCCESS) {
-            pmgr_error("Could not get key/value for %s @ file %s:%d",
-                keystr, __FILE__, __LINE__
-            );
-            PMI_Abort(1, "Could not copy rank into key buffer");
-        }
-
-        /* break the ip:port string */
-        char* ipstr = strtok(valstr, ":");
-        char* portstr = strtok(NULL, ":");
-
-        /* prepare IP and port to be stored in the table */
-        struct in_addr ip_tmp;
-        if (inet_aton(ipstr, &ip_tmp) == 0) {
-            pmgr_error("Failed to convert dotted decimal notation to struct in_addr for %s @ file %s:%d",
-                ipstr, __FILE__, __LINE__
-            );
-            PMI_Abort(1, "Could not convert IP address string to struct");
-        }
-        short port_tmp = atoi(portstr);
-
-        /* write the ip and port to our table */
-        memcpy((char*)table + i*addr_size,                  &ip_tmp,   sizeof(ip_tmp));
-        memcpy((char*)table + i*addr_size + sizeof(ip_tmp), &port_tmp, sizeof(port_tmp));
+        iter++;
     }
+
+    /* mark the tree as being open */
+    t->is_open = 1;
+
+    /* check whether everyone succeeded in connecting */
+    pmgr_tree_check(t, 1);
 
     /* free the kvs name, key, and value */
     pmgr_free(valstr);
     pmgr_free(keystr);
     pmgr_free(kvsstr);
-#endif /* ifdef HAVE_PMI */
-
-    return PMGR_SUCCESS;
-}
-
-/* open socket tree across MPI tasks */
-int pmgr_tree_open_pmi(pmgr_tree_t* t, int ranks, int rank, const char* auth)
-{
-    /* allocate space to hold a table of ip:port entries from each rank */
-    size_t addr_size = sizeof(struct in_addr) + sizeof(short);
-    void* table = malloc(ranks * addr_size);
-
-    /* create a socket to accept connection from parent */
-    int sockfd = -1;
-    struct in_addr ip;
-    short port;
-    if (pmgr_open_listening_socket(NULL, 0, &sockfd, &ip, &port) != PMGR_SUCCESS) {
-        pmgr_error("Creating listening socket @ file %s:%d",
-            __FILE__, __LINE__
-        );
-        exit(1);
-    }
-
-    /* collect entries from all procs via PMI */
-    pmgr_tree_table_pmi(ranks, rank, &ip, port, table);
-
-    /* open the tree using those entries */
-    pmgr_tree_open_table(t, ranks, rank, table, sockfd, auth);
-
-    /* free off the ip:port table */
-    if (table != NULL) {
-        free(table);
-        table = NULL;
-    }
 
     /* close our listening socket */
     if (sockfd >= 0) {
         close(sockfd);
         sockfd = -1;
     }
+#endif /* ifdef HAVE_PMI */
 
     return PMGR_SUCCESS;
 }

@@ -119,7 +119,7 @@ set the following variable at run time:
 One can configure PMGR_COLLECTIVE to use PMI by default by defining
 the following at compile time:
 
-  -DHAVE_PMI -DMPIRUN_USE_PMI=1
+  -DHAVE_PMI -DMPIRUN_PMI_ENABLE=1
  
 Debug statements can be turned on for troubleshooting or timing.  There are
 three basic debug verbosity levels.  For each of these, there is a way to
